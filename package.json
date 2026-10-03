@@ -1,0 +1,11 @@
+{
+  "name": "sirassist",
+  "version": "1.0.0",
+  "description": "SIRAssist – Citizen Assistance and Verification Management System for Electoral Roll Revision",
+  "scripts": {
+    "start:backend": "cd backend && npm start",
+    "dev:backend": "cd backend && npm run dev",
+    "dev:frontend": "cd frontend && npm run dev",
+    "build:frontend": "cd frontend && npm run build"
+  }
+}
