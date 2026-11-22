@@ -4,8 +4,9 @@ require('dotenv').config({ path: path.join(__dirname, '../.env') });
 
 let pool = null;
 let isRealMySQL = false;
+let initPromise = null;
 
-// In-memory fallback mock dataset derived from seed.sql
+// In-memory fallback mock dataset derived from seed.sql (used only if MySQL server is unreachable)
 const mockStore = {
   addresses: [
     { address_id: 1, house_number: '#45, 2nd Main', street: 'Vijayanagar', village: 'Bengaluru Urban', taluk: 'Bengaluru South', district: 'Bengaluru', state: 'Karnataka', pin_code: '560040' },
@@ -116,10 +117,15 @@ async function initDB() {
   }
 }
 
-initDB();
+initPromise = initDB();
 
-// Unified query wrapper
+/**
+ * Unified parameterized query wrapper
+ * Prevents SQL Injection via prepared statements
+ */
 async function query(sql, params = []) {
+  if (initPromise) await initPromise;
+
   if (isRealMySQL && pool) {
     try {
       const [rows] = await pool.query(sql, params);
@@ -131,6 +137,34 @@ async function query(sql, params = []) {
   } else {
     // Return mock data fallback for testing when MySQL server is offline
     return executeMockQuery(sql, params);
+  }
+}
+
+/**
+ * Execute a transaction with automatic COMMIT and ROLLBACK
+ * Ensures ACID properties for multi-table updates
+ */
+async function executeTransaction(callback) {
+  if (initPromise) await initPromise;
+
+  if (isRealMySQL && pool) {
+    const connection = await pool.getConnection();
+    try {
+      await connection.beginTransaction();
+      const result = await callback(connection);
+      await connection.commit();
+      return result;
+    } catch (err) {
+      await connection.rollback();
+      throw err;
+    } finally {
+      connection.release();
+    }
+  } else {
+    // Mock mode execution
+    return await callback({
+      query: (sql, params) => query(sql, params)
+    });
   }
 }
 
@@ -189,12 +223,12 @@ function executeMockQuery(sql, params) {
     return mockStore.areas;
   }
 
-  // Fallback default
   return [{ affectedRows: 1, insertId: Date.now() }];
 }
 
 module.exports = {
   query,
+  executeTransaction,
   getIsRealMySQL: () => isRealMySQL,
   mockStore
 };

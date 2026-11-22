@@ -6,8 +6,8 @@ async function createAssistanceRequest(req, res, next) {
     const citizenId = req.user.citizen_id;
     const { request_type, priority, notes, area_id } = req.body;
 
-    if (!citizenId || !request_type) {
-      return res.status(400).json({ error: 'Citizen ID and request_type are required.' });
+    if (!citizenId) {
+      return res.status(403).json({ error: 'Only citizens can create assistance requests.' });
     }
 
     const result = await db.query(
@@ -46,6 +46,7 @@ async function getAssistanceRequests(req, res, next) {
 
     const params = [];
 
+    // Role-based filtering
     if (role === 'CITIZEN' && citizen_id) {
       sql += ' WHERE ar.citizen_id = ?';
       params.push(citizen_id);
@@ -65,8 +66,12 @@ async function getAssistanceRequests(req, res, next) {
 
 async function updateAssistanceStatus(req, res, next) {
   try {
-    const assistanceId = req.params.id;
+    const assistanceId = parseInt(req.params.id);
     const { status, notes, volunteer_id } = req.body;
+
+    if (isNaN(assistanceId)) {
+      return res.status(400).json({ error: 'Invalid assistance request ID.' });
+    }
 
     const validStatuses = ['PENDING', 'ASSIGNED', 'IN_PROGRESS', 'COMPLETED', 'REJECTED'];
     if (status && !validStatuses.includes(status)) {

@@ -15,6 +15,7 @@ import RequestDetails from './pages/RequestDetails';
 import VolunteerDashboard from './pages/VolunteerDashboard';
 import AdminDashboard from './pages/AdminDashboard';
 import DbmsDemoPage from './pages/DbmsDemoPage';
+import ValidationDemoPage from './pages/ValidationDemoPage';
 
 function ProtectedRoute({ children, allowedRoles }) {
   const { user, loading } = useContext(AuthContext);
@@ -83,12 +84,20 @@ export default function App() {
             }
           />
 
-          {/* Admin Protected Route */}
+          {/* Admin Protected Routes */}
           <Route
             path="/admin-dashboard"
             element={
               <ProtectedRoute allowedRoles={['ADMIN']}>
                 <AdminDashboard />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/admin/validation-demo"
+            element={
+              <ProtectedRoute allowedRoles={['ADMIN']}>
+                <ValidationDemoPage />
               </ProtectedRoute>
             }
           />

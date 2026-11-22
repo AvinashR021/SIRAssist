@@ -14,7 +14,11 @@ async function getRequests(req, res, next) {
     `;
     const params = [];
 
-    if (userRole === 'CITIZEN' && citizenId) {
+    // Role-based access control: Citizens can only see their own verification requests
+    if (userRole === 'CITIZEN') {
+      if (!citizenId) {
+        return res.status(403).json({ error: 'Citizen identifier not found in authorization token.' });
+      }
       sql += ' WHERE vr.citizen_id = ?';
       params.push(citizenId);
     }
@@ -33,61 +37,70 @@ async function createRequest(req, res, next) {
     const citizenId = req.user.citizen_id;
     const { request_type, voter_id, remarks, selected_document_ids } = req.body;
 
-    if (!citizenId || !request_type) {
-      return res.status(400).json({ error: 'Citizen ID and request_type are required.' });
+    if (!citizenId) {
+      return res.status(403).json({ error: 'Only registered citizens can create verification requests.' });
     }
 
-    // Demonstrates Transaction workflow (Requirement #30.5)
-    // 1. Create Verification Request
-    const reqRes = await db.query(
-      'INSERT INTO Verification_Request (citizen_id, voter_id, request_type, current_status, remarks) VALUES (?, ?, ?, ?, ?)',
-      [citizenId, voter_id || null, request_type, 'SUBMITTED', remarks || 'New request created']
-    );
-
-    const requestId = reqRes.insertId || Date.now();
-
-    // 2. Link documents in Request_Document junction table
-    if (Array.isArray(selected_document_ids) && selected_document_ids.length > 0) {
-      for (const docId of selected_document_ids) {
-        await db.query('INSERT INTO Request_Document (request_id, document_id) VALUES (?, ?)', [requestId, docId]);
-      }
-    } else {
-      // Auto-attach matching documents owned by the citizen
-      const reqDocs = await db.query(
-        'SELECT dr.document_type FROM Document_Requirement dr WHERE dr.request_type = ? AND dr.active = 1',
-        [request_type]
+    // Wrap multi-table write inside an ACID transaction
+    const result = await db.executeTransaction(async (conn) => {
+      // 1. Insert Verification Request
+      const [reqRes] = await conn.query(
+        'INSERT INTO Verification_Request (citizen_id, voter_id, request_type, current_status, remarks) VALUES (?, ?, ?, ?, ?)',
+        [citizenId, voter_id || null, request_type, 'SUBMITTED', remarks || 'Request initiated by citizen']
       );
-      const reqTypes = reqDocs.map(r => r.document_type);
 
-      if (reqTypes.length > 0) {
-        const citDocs = await db.query(
-          'SELECT document_id FROM Document WHERE citizen_id = ? AND document_type IN (?)',
-          [citizenId, reqTypes]
+      const requestId = reqRes.insertId || Date.now();
+
+      // 2. Link documents if selected
+      if (Array.isArray(selected_document_ids) && selected_document_ids.length > 0) {
+        for (const docId of selected_document_ids) {
+          // Ownership verification: ensure doc belongs to this citizen
+          const [docCheck] = await conn.query(
+            'SELECT document_id FROM Document WHERE document_id = ? AND citizen_id = ?',
+            [docId, citizenId]
+          );
+          if (docCheck.length > 0) {
+            await conn.query('INSERT IGNORE INTO Request_Document (request_id, document_id) VALUES (?, ?)', [requestId, docId]);
+          }
+        }
+      } else {
+        // Auto-attach matching documents owned by the citizen for this request_type
+        const [reqDocs] = await conn.query(
+          'SELECT document_type FROM Document_Requirement WHERE request_type = ? AND active = 1',
+          [request_type]
         );
-        for (const cd of citDocs) {
-          await db.query('INSERT IGNORE INTO Request_Document (request_id, document_id) VALUES (?, ?)', [requestId, cd.document_id]);
+        const reqTypes = reqDocs.map(r => r.document_type);
+
+        if (reqTypes.length > 0) {
+          const [citDocs] = await conn.query(
+            'SELECT document_id FROM Document WHERE citizen_id = ? AND document_type IN (?)',
+            [citizenId, reqTypes]
+          );
+          for (const cd of citDocs) {
+            await conn.query('INSERT IGNORE INTO Request_Document (request_id, document_id) VALUES (?, ?)', [requestId, cd.document_id]);
+          }
         }
       }
-    }
 
-    // 3. Log initial status history
-    await db.query(
-      'INSERT INTO Status_History (request_id, old_status, new_status, changed_by, remarks) VALUES (?, ?, ?, ?, ?)',
-      [requestId, 'NONE', 'SUBMITTED', 'Citizen Submission', 'Request created successfully']
-    );
+      // Note: If real MySQL is used, database triggers trg_after_verification_request_insert
+      // automatically insert into Status_History and Notification.
+      // If running in mock store mode, populate mock history to avoid duplicates.
+      if (!db.getIsRealMySQL()) {
+        await conn.query(
+          'INSERT INTO Status_History (request_id, old_status, new_status, changed_by, remarks) VALUES (?, ?, ?, ?, ?)',
+          [requestId, 'NONE', 'SUBMITTED', 'Citizen Submission', 'Request created and submitted']
+        );
+      }
 
-    // 4. Create notification
-    await db.query(
-      'INSERT INTO Notification (citizen_id, request_id, message) VALUES (?, ?, ?)',
-      [citizenId, requestId, `Verification request #${requestId} (${request_type}) has been created successfully with status: SUBMITTED.`]
-    );
+      return { requestId };
+    });
 
-    // Evaluate readiness summary
-    const readiness = await evaluateVerificationReadiness(citizenId, request_type, requestId);
+    // Evaluate readiness checklist
+    const readiness = await evaluateVerificationReadiness(citizenId, request_type, result.requestId);
 
     res.status(201).json({
-      message: 'Request created successfully.',
-      request_id: requestId,
+      message: 'Verification request created successfully.',
+      request_id: result.requestId,
       current_status: 'SUBMITTED',
       readiness
     });
@@ -98,7 +111,10 @@ async function createRequest(req, res, next) {
 
 async function getRequestById(req, res, next) {
   try {
-    const requestId = req.params.id;
+    const requestId = parseInt(req.params.id);
+    if (isNaN(requestId)) {
+      return res.status(400).json({ error: 'Invalid request ID format.' });
+    }
 
     const requests = await db.query(
       `SELECT vr.request_id, vr.citizen_id, c.name AS citizen_name, c.email AS citizen_email, c.mobile AS citizen_mobile,
@@ -114,6 +130,11 @@ async function getRequestById(req, res, next) {
     }
 
     const request = requests[0];
+
+    // Ownership check for citizen
+    if (req.user.role === 'CITIZEN' && req.user.citizen_id !== request.citizen_id) {
+      return res.status(403).json({ error: 'Access denied. You can only view your own verification requests.' });
+    }
 
     // Linked documents
     const documents = await db.query(
@@ -149,43 +170,65 @@ async function getRequestById(req, res, next) {
 
 async function updateRequestStatus(req, res, next) {
   try {
-    const requestId = req.params.id;
+    const requestId = parseInt(req.params.id);
     const { status, remarks } = req.body;
 
-    if (!status) {
-      return res.status(400).json({ error: 'New status is required.' });
+    if (isNaN(requestId)) {
+      return res.status(400).json({ error: 'Invalid request ID format.' });
     }
 
-    const validStatuses = ['DRAFT', 'SUBMITTED', 'DOCUMENTS_PENDING', 'DOCUMENTS_SUBMITTED', 'UNDER_REVIEW', 'RESOLVED', 'CANCELLED'];
-    if (!validStatuses.includes(status)) {
-      return res.status(400).json({ error: `Invalid status. Allowed values: ${validStatuses.join(', ')}` });
-    }
+    // Fetch existing request
+    const currentReqs = await db.query(
+      'SELECT request_id, current_status, citizen_id FROM Verification_Request WHERE request_id = ?',
+      [requestId]
+    );
 
-    const currentReqs = await db.query('SELECT current_status, citizen_id FROM Verification_Request WHERE request_id = ?', [requestId]);
     if (currentReqs.length === 0) {
       return res.status(404).json({ error: 'Verification request not found.' });
     }
 
-    const oldStatus = currentReqs[0].current_status;
-    const citizenId = currentReqs[0].citizen_id;
+    const currentReq = currentReqs[0];
+    const oldStatus = currentReq.current_status;
 
-    // Update Verification_Request
-    await db.query(
-      'UPDATE Verification_Request SET current_status = ?, remarks = COALESCE(?, remarks), updated_at = NOW() WHERE request_id = ?',
-      [status, remarks, requestId]
-    );
+    if (oldStatus === status) {
+      return res.status(400).json({ error: `Request is already in status '${status}'. No transition required.` });
+    }
 
-    // Insert Status History
-    await db.query(
-      'INSERT INTO Status_History (request_id, old_status, new_status, changed_by, remarks) VALUES (?, ?, ?, ?, ?)',
-      [requestId, oldStatus, status, req.user.username || 'Admin User', remarks || `Status updated to ${status}`]
-    );
+    // Enforce valid status transitions
+    const validTransitions = {
+      DRAFT: ['SUBMITTED', 'CANCELLED'],
+      SUBMITTED: ['DOCUMENTS_PENDING', 'UNDER_REVIEW', 'CANCELLED'],
+      DOCUMENTS_PENDING: ['DOCUMENTS_SUBMITTED', 'UNDER_REVIEW', 'CANCELLED'],
+      DOCUMENTS_SUBMITTED: ['UNDER_REVIEW', 'DOCUMENTS_PENDING', 'CANCELLED'],
+      UNDER_REVIEW: ['RESOLVED', 'DOCUMENTS_PENDING', 'CANCELLED'],
+      RESOLVED: ['UNDER_REVIEW'], // Admin re-opening
+      CANCELLED: []
+    };
 
-    // Create Notification
-    await db.query(
-      'INSERT INTO Notification (citizen_id, request_id, message) VALUES (?, ?, ?)',
-      [citizenId, requestId, `Your verification request #${requestId} status has been updated to ${status}.`]
-    );
+    const allowedNext = validTransitions[oldStatus] || [];
+    if (!allowedNext.includes(status)) {
+      return res.status(400).json({
+        error: `Invalid status transition from '${oldStatus}' to '${status}'. Allowed next statuses: ${allowedNext.join(', ') || 'None (Terminal state)'}`
+      });
+    }
+
+    // Execute atomic transaction to update request status
+    await db.executeTransaction(async (conn) => {
+      await conn.query(
+        'UPDATE Verification_Request SET current_status = ?, remarks = COALESCE(?, remarks), updated_at = NOW() WHERE request_id = ?',
+        [status, remarks || `Status changed from ${oldStatus} to ${status}`, requestId]
+      );
+
+      // In real MySQL, trigger trg_after_verification_request_update_status automatically
+      // handles Status_History insertion and Notification generation.
+      // If in mock store, record it manually:
+      if (!db.getIsRealMySQL()) {
+        await conn.query(
+          'INSERT INTO Status_History (request_id, old_status, new_status, changed_by, remarks) VALUES (?, ?, ?, ?, ?)',
+          [requestId, oldStatus, status, req.user.username || 'Admin User', remarks || `Status updated to ${status}`]
+        );
+      }
+    });
 
     res.json({
       message: 'Request status updated successfully.',
@@ -200,8 +243,16 @@ async function updateRequestStatus(req, res, next) {
 
 async function getReadiness(req, res, next) {
   try {
-    const requestId = req.params.id;
-    const currentReqs = await db.query('SELECT citizen_id, request_type FROM Verification_Request WHERE request_id = ?', [requestId]);
+    const requestId = parseInt(req.params.id);
+    if (isNaN(requestId)) {
+      return res.status(400).json({ error: 'Invalid request ID format.' });
+    }
+
+    const currentReqs = await db.query(
+      'SELECT citizen_id, request_type FROM Verification_Request WHERE request_id = ?',
+      [requestId]
+    );
+
     if (currentReqs.length === 0) {
       return res.status(404).json({ error: 'Request not found.' });
     }

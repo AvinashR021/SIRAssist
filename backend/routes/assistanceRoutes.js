@@ -1,11 +1,12 @@
 const express = require('express');
 const router = express.Router();
 const assistanceController = require('../controllers/assistanceController');
-const { verifyToken } = require('../middleware/auth');
+const { verifyToken, requireRole } = require('../middleware/auth');
+const { validateAssistanceRequest } = require('../middleware/validator');
 
-router.get('/match', verifyToken, assistanceController.matchVolunteers);
 router.get('/', verifyToken, assistanceController.getAssistanceRequests);
-router.post('/', verifyToken, assistanceController.createAssistanceRequest);
-router.put('/:id', verifyToken, assistanceController.updateAssistanceStatus);
+router.post('/', verifyToken, validateAssistanceRequest, assistanceController.createAssistanceRequest);
+router.put('/:id', verifyToken, requireRole('ADMIN', 'VOLUNTEER'), assistanceController.updateAssistanceStatus);
+router.get('/match', verifyToken, assistanceController.matchVolunteers);
 
 module.exports = router;

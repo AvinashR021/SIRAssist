@@ -45,34 +45,54 @@ async function updateProfile(req, res, next) {
     const { name, date_of_birth, gender, mobile, address } = req.body;
 
     if (!citizenId) {
-      return res.status(400).json({ error: 'Citizen ID missing.' });
+      return res.status(403).json({ error: 'Citizen identifier missing in session token.' });
     }
 
-    await db.query(
-      'UPDATE Citizen SET name = COALESCE(?, name), date_of_birth = COALESCE(?, date_of_birth), gender = COALESCE(?, gender), mobile = COALESCE(?, mobile) WHERE citizen_id = ?',
-      [name, date_of_birth, gender, mobile, citizenId]
-    );
+    // Atomic update of citizen profile & address
+    await db.executeTransaction(async (conn) => {
+      await conn.query(
+        'UPDATE Citizen SET name = COALESCE(?, name), date_of_birth = COALESCE(?, date_of_birth), gender = COALESCE(?, gender), mobile = COALESCE(?, mobile) WHERE citizen_id = ?',
+        [name, date_of_birth, gender, mobile, citizenId]
+      );
 
-    if (address) {
-      const citizenRows = await db.query('SELECT address_id FROM Citizen WHERE citizen_id = ?', [citizenId]);
-      const currentAddressId = citizenRows[0]?.address_id;
+      if (address) {
+        const [citizenRows] = await conn.query('SELECT address_id FROM Citizen WHERE citizen_id = ?', [citizenId]);
+        const currentAddressId = citizenRows[0]?.address_id;
 
-      if (currentAddressId) {
-        await db.query(
-          'UPDATE Address SET house_number = ?, street = ?, village = ?, taluk = ?, district = ?, state = ?, pin_code = ? WHERE address_id = ?',
-          [address.house_number, address.street, address.village, address.taluk, address.district, address.state || 'Karnataka', address.pin_code, currentAddressId]
-        );
-      } else {
-        const addrRes = await db.query(
-          'INSERT INTO Address (house_number, street, village, taluk, district, state, pin_code) VALUES (?, ?, ?, ?, ?, ?, ?)',
-          [address.house_number, address.street, address.village, address.taluk, address.district, address.state || 'Karnataka', address.pin_code]
-        );
-        const newAddressId = addrRes.insertId || Date.now();
-        await db.query('UPDATE Citizen SET address_id = ? WHERE citizen_id = ?', [newAddressId, citizenId]);
+        if (currentAddressId) {
+          await conn.query(
+            'UPDATE Address SET house_number = ?, street = ?, village = ?, taluk = ?, district = ?, state = ?, pin_code = ? WHERE address_id = ?',
+            [
+              address.house_number || 'N/A',
+              address.street || 'Main Street',
+              address.village || 'City Zone',
+              address.taluk || 'Urban',
+              address.district || 'Bengaluru',
+              address.state || 'Karnataka',
+              address.pin_code || '560001',
+              currentAddressId
+            ]
+          );
+        } else {
+          const [addrRes] = await conn.query(
+            'INSERT INTO Address (house_number, street, village, taluk, district, state, pin_code) VALUES (?, ?, ?, ?, ?, ?, ?)',
+            [
+              address.house_number || 'N/A',
+              address.street || 'Main Street',
+              address.village || 'City Zone',
+              address.taluk || 'Urban',
+              address.district || 'Bengaluru',
+              address.state || 'Karnataka',
+              address.pin_code || '560001'
+            ]
+          );
+          const newAddressId = addrRes.insertId || Date.now();
+          await conn.query('UPDATE Citizen SET address_id = ? WHERE citizen_id = ?', [newAddressId, citizenId]);
+        }
       }
-    }
+    });
 
-    res.json({ message: 'Profile updated successfully.' });
+    res.json({ message: 'Profile and address updated successfully.' });
   } catch (err) {
     next(err);
   }
