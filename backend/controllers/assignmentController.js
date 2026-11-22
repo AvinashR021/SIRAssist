@@ -1,10 +1,13 @@
 /**
  * SIRAssist – Admin Volunteer Assignment Controller
  * Allows admins to view all documents and assign or reassign volunteers.
+ * Uses atomic MySQL transactions and row-level locking (FOR UPDATE) to guarantee consistency.
  */
 const db = require('../db/connection');
 
 // POST /api/admin/volunteer-assignments
+// Atomic transaction: Validates document & volunteer, cancels prior active assignment,
+// creates new assignment, and updates document workflow status.
 async function createAssignment(req, res, next) {
   try {
     const adminUserId = req.user?.user_id;
@@ -20,42 +23,66 @@ async function createAssignment(req, res, next) {
       return res.status(400).json({ error: 'Invalid document_id or volunteer_id.' });
     }
 
-    // Check document exists
-    const docs = await db.query('SELECT document_id FROM Document WHERE document_id = ?', [docId]);
-    if (!docs || docs.length === 0) return res.status(404).json({ error: 'Document not found.' });
+    const result = await db.executeTransaction(async (conn) => {
+      // 1. Lock and validate document
+      const [docs] = await conn.query(
+        'SELECT document_id, file_review_status FROM Document WHERE document_id = ? FOR UPDATE',
+        [docId]
+      );
+      if (!docs || docs.length === 0) {
+        const notFoundErr = new Error('Document not found.');
+        notFoundErr.status = 404;
+        throw notFoundErr;
+      }
+      const doc = docs[0];
 
-    // Check volunteer exists and is approved
-    const vols = await db.query(
-      `SELECT volunteer_id, name FROM Volunteer WHERE volunteer_id = ? AND verification_status = 'Approved'`,
-      [volId]
-    );
-    if (!vols || vols.length === 0) {
-      return res.status(404).json({ error: 'Volunteer not found or volunteer is not in Approved status.' });
-    }
+      // 2. Validate volunteer is Approved
+      const [vols] = await conn.query(
+        `SELECT volunteer_id, name FROM Volunteer WHERE volunteer_id = ? AND verification_status = 'Approved'`,
+        [volId]
+      );
+      if (!vols || vols.length === 0) {
+        const volErr = new Error('Volunteer not found or volunteer is not in Approved status.');
+        volErr.status = 404;
+        throw volErr;
+      }
+      const volunteerName = vols[0].name;
 
-    // Cancel any previous active assignment for this document
-    await db.query(
-      `UPDATE Volunteer_Assignment SET status = 'Cancelled' WHERE document_id = ? AND status = 'Active'`,
-      [docId]
-    );
+      // 3. Cancel any previous active assignment for this document
+      await conn.query(
+        `UPDATE Volunteer_Assignment SET status = 'Cancelled' WHERE document_id = ? AND status = 'Active'`,
+        [docId]
+      );
 
-    // Insert new assignment
-    const result = await db.query(
-      `INSERT INTO Volunteer_Assignment (document_id, volunteer_id, assigned_by) VALUES (?, ?, ?)`,
-      [docId, volId, adminUserId]
-    );
+      // 4. Create new Active assignment
+      const [insRes] = await conn.query(
+        `INSERT INTO Volunteer_Assignment (document_id, volunteer_id, assigned_by, status, assigned_at)
+         VALUES (?, ?, ?, 'Active', NOW())`,
+        [docId, volId, adminUserId]
+      );
 
-    // Update document status to Under Review if it was Pending Review
-    await db.query(
-      `UPDATE Document SET file_review_status = 'Under Review' WHERE document_id = ? AND file_review_status = 'Pending Review'`,
-      [docId]
-    );
+      // 5. Update Document status to 'Under Review' if it was 'Pending Review'
+      if (doc.file_review_status === 'Pending Review') {
+        await conn.query(
+          `UPDATE Document SET file_review_status = 'Under Review', updated_at = NOW() WHERE document_id = ?`,
+          [docId]
+        );
+      }
+
+      return {
+        assignmentId: insRes.insertId,
+        volunteerName
+      };
+    });
 
     res.status(201).json({
-      message: `Document successfully assigned to volunteer ${vols[0].name}.`,
-      assignment_id: result.insertId || Date.now()
+      message: `Document successfully assigned to volunteer ${result.volunteerName}.`,
+      assignment_id: result.assignmentId
     });
   } catch (err) {
+    if (err.status) {
+      return res.status(err.status).json({ error: err.message });
+    }
     next(err);
   }
 }

@@ -34,11 +34,15 @@ function getNotificationContent(decision, feedback, docType) {
 }
 
 // ─── VOLUNTEER: List documents assigned to this volunteer ───────────────────
+// Supports separate views: 'pending' (actionable) vs 'history' (completed/reviewed) vs 'all'
 async function getAssignedDocuments(req, res, next) {
   try {
     const volunteerId = req.user?.volunteer_id;
     if (!volunteerId) return res.status(403).json({ error: 'Volunteer session required.' });
 
+    const view = req.query.view || 'all'; // 'pending' | 'history' | 'all'
+
+    // Fetch latest assignment per document for this volunteer (Active or Completed)
     const rows = await db.query(
       `SELECT
          d.document_id, d.document_type, d.description,
@@ -54,20 +58,52 @@ async function getAssignedDocuments(req, res, next) {
        LEFT JOIN Document_Version v
          ON v.document_id = d.document_id AND v.version_number = d.current_version
        LEFT JOIN Document_Review r ON r.version_id = v.version_id
-       WHERE va.volunteer_id = ? AND va.status = 'Active'
-       ORDER BY (d.file_review_status = 'Pending Review') DESC, d.created_at DESC`,
+       WHERE va.assignment_id IN (
+         SELECT MAX(va2.assignment_id)
+         FROM Volunteer_Assignment va2
+         WHERE va2.volunteer_id = ? AND va2.status IN ('Active', 'Completed')
+         GROUP BY va2.document_id
+       )
+       ORDER BY (d.file_review_status = 'Pending Review' AND va.status = 'Active') DESC, d.created_at DESC`,
       [volunteerId]
     );
 
     const docList = rows || [];
+
+    // Separate into pending vs history
+    // Pending: Active assignment AND not yet finalized (Pending Review, Under Review, or waiting for initial action)
+    const pendingDocs = docList.filter(
+      r => r.assignment_status === 'Active' &&
+           (r.file_review_status === 'Pending Review' || r.file_review_status === 'Under Review' || !r.review_id)
+    );
+
+    // History: Assignment is Completed, or volunteer already submitted a review
+    const historyDocs = docList.filter(
+      r => r.assignment_status === 'Completed' ||
+           r.file_review_status === 'Reviewed – No Issues Found' ||
+           Boolean(r.review_id)
+    );
+
     const summary = {
-      pending: docList.filter(r => r.file_review_status === 'Pending Review').length,
-      reviewed: docList.filter(r => r.file_review_status === 'Reviewed – No Issues Found').length,
+      pending: pendingDocs.length,
+      reviewed: docList.filter(r => r.file_review_status === 'Reviewed – No Issues Found' || r.assignment_status === 'Completed').length,
       correction: docList.filter(r => r.file_review_status === 'Correction Required').length,
       awaiting: docList.filter(r => r.file_review_status === 'Additional Document Requested' || r.file_review_status === 'Unable to Review').length
     };
 
-    res.json({ summary, documents: docList });
+    let returnedDocs = docList;
+    if (view === 'pending') {
+      returnedDocs = pendingDocs;
+    } else if (view === 'history') {
+      returnedDocs = historyDocs;
+    }
+
+    res.json({
+      summary,
+      documents: returnedDocs,
+      pending: pendingDocs,
+      history: historyDocs
+    });
   } catch (err) {
     next(err);
   }
@@ -81,15 +117,32 @@ async function getAssignedDocumentDetail(req, res, next) {
     if (!volunteerId) return res.status(403).json({ error: 'Volunteer session required.' });
     if (isNaN(documentId)) return res.status(400).json({ error: 'Invalid document ID.' });
 
-    // Enforce active assignment check
+    // Authorization: Volunteer must have an Active or Completed assignment,
+    // OR have previously reviewed this document.
     const assigned = await db.query(
-      `SELECT assignment_id FROM Volunteer_Assignment
-       WHERE document_id = ? AND volunteer_id = ? AND status = 'Active'`,
+      `SELECT assignment_id, status FROM Volunteer_Assignment
+       WHERE document_id = ? AND volunteer_id = ? AND status IN ('Active', 'Completed')
+       ORDER BY assignment_id DESC LIMIT 1`,
       [documentId, volunteerId]
     );
+
+    let prevReview = [];
     if (!assigned || assigned.length === 0) {
-      return res.status(403).json({ error: 'Access denied. This document is not currently assigned to you.' });
+      prevReview = await db.query(
+        `SELECT r.review_id
+         FROM Document_Review r
+         JOIN Document_Version v ON v.version_id = r.version_id
+         WHERE v.document_id = ? AND r.volunteer_id = ?
+         LIMIT 1`,
+        [documentId, volunteerId]
+      );
     }
+
+    if ((!assigned || assigned.length === 0) && (!prevReview || prevReview.length === 0)) {
+      return res.status(403).json({ error: 'Access denied. This document is not assigned to you.' });
+    }
+
+    const assignment = assigned && assigned.length > 0 ? assigned[0] : null;
 
     const docRows = await db.query(
       `SELECT d.*, c.name AS citizen_name, c.email AS citizen_email
@@ -98,6 +151,7 @@ async function getAssignedDocumentDetail(req, res, next) {
       [documentId]
     );
     if (!docRows || docRows.length === 0) return res.status(404).json({ error: 'Document not found.' });
+    const doc = docRows[0];
 
     const versions = await db.query(
       `SELECT v.version_id, v.version_number, v.original_filename, v.mime_type,
@@ -113,7 +167,20 @@ async function getAssignedDocumentDetail(req, res, next) {
       [documentId]
     );
 
-    res.json({ document: docRows[0], versions });
+    // Read-only determination:
+    // If assignment is completed, or if current version is already reviewed, this is strictly read-only
+    const currentVersionObj = versions.find(v => v.version_number === doc.current_version);
+    const isAlreadyReviewed = Boolean(currentVersionObj?.review_id);
+    const isCompleted = assignment ? assignment.status === 'Completed' : true;
+    const isReadOnly = isCompleted || isAlreadyReviewed || doc.file_review_status === 'Reviewed – No Issues Found';
+
+    res.json({
+      document: doc,
+      versions,
+      is_read_only: isReadOnly,
+      assignment_status: assignment?.status || 'Completed',
+      has_active_assignment: assignment?.status === 'Active'
+    });
   } catch (err) {
     next(err);
   }
@@ -163,44 +230,47 @@ async function submitReview(req, res, next) {
       return res.status(400).json({ error: 'Feedback message cannot exceed 2000 characters.' });
     }
 
-    // Check volunteer assignment
+    // Check volunteer assignment - must be currently Active
     const assigned = await db.query(
       `SELECT assignment_id FROM Volunteer_Assignment
-       WHERE document_id = ? AND volunteer_id = ? AND status = 'Active'`,
+       WHERE document_id = ? AND volunteer_id = ? AND status = 'Active'
+       LIMIT 1`,
       [documentId, volunteerId]
     );
     if (!assigned || assigned.length === 0) {
-      return res.status(403).json({ error: 'Access denied. You are not assigned to review this document.' });
+      return res.status(403).json({ error: 'Access denied. You do not have an active assignment to review this document.' });
     }
 
-    // Retrieve document header and current version ID
-    const docRows = await db.query(
-      `SELECT d.document_id, d.current_version, d.document_type, d.citizen_id,
-              v.version_id
-       FROM Document d
-       JOIN Document_Version v ON v.document_id = d.document_id AND v.version_number = d.current_version
-       WHERE d.document_id = ?`,
-      [documentId]
-    );
-    if (!docRows || docRows.length === 0) {
-      return res.status(404).json({ error: 'Document or latest version not found.' });
-    }
-    const doc = docRows[0];
-
-    // Prevent duplicate review on the exact same version
-    const existing = await db.query(
-      'SELECT review_id FROM Document_Review WHERE version_id = ?',
-      [doc.version_id]
-    );
-    if (existing && existing.length > 0) {
-      return res.status(409).json({ error: `Version ${doc.current_version} of this document has already been reviewed.` });
-    }
-
-    const { title, message } = getNotificationContent(review_decision, feedback_message?.trim(), doc.document_type);
-
-    // Atomic transaction for ACID guarantee
+    // Atomic transaction with row-level locking for ACID guarantee
     const result = await db.executeTransaction(async (conn) => {
-      // 1. Insert Review
+      // 1. Lock Document and get current version with FOR UPDATE
+      const [docRows] = await conn.query(
+        `SELECT d.document_id, d.current_version, d.document_type, d.citizen_id,
+                v.version_id
+         FROM Document d
+         JOIN Document_Version v ON v.document_id = d.document_id AND v.version_number = d.current_version
+         WHERE d.document_id = ? FOR UPDATE`,
+        [documentId]
+      );
+      if (!docRows || docRows.length === 0) {
+        const notFoundErr = new Error('Document or latest version not found.');
+        notFoundErr.status = 404;
+        throw notFoundErr;
+      }
+      const doc = docRows[0];
+
+      // 2. Prevent duplicate review on the exact same version
+      const [existing] = await conn.query(
+        'SELECT review_id FROM Document_Review WHERE version_id = ? FOR UPDATE',
+        [doc.version_id]
+      );
+      if (existing && existing.length > 0) {
+        const conflictErr = new Error(`Version ${doc.current_version} of this document has already been reviewed.`);
+        conflictErr.status = 409;
+        throw conflictErr;
+      }
+
+      // 3. Insert Review
       const [revRes] = await conn.query(
         `INSERT INTO Document_Review
            (version_id, volunteer_id, review_decision, issue_category, feedback_message, additional_document_request)
@@ -216,21 +286,22 @@ async function submitReview(req, res, next) {
       );
       const reviewId = revRes.insertId;
 
-      // 2. Update Document status
+      // 4. Update Document status
       await conn.query(
         'UPDATE Document SET file_review_status = ?, updated_at = NOW() WHERE document_id = ?',
         [review_decision, documentId]
       );
 
-      // 3. Mark assignment completed if no issues found
+      // 5. Mark assignment completed if no issues found
       if (review_decision === 'Reviewed – No Issues Found') {
         await conn.query(
-          `UPDATE Volunteer_Assignment SET status = 'Completed' WHERE document_id = ? AND volunteer_id = ?`,
+          `UPDATE Volunteer_Assignment SET status = 'Completed' WHERE document_id = ? AND volunteer_id = ? AND status = 'Active'`,
           [documentId, volunteerId]
         );
       }
 
-      // 4. Create Notification for citizen
+      // 6. Create Notification for citizen
+      const { title, message } = getNotificationContent(review_decision, feedback_message?.trim(), doc.document_type);
       await conn.query(
         `INSERT INTO Notification (citizen_id, request_id, document_id, review_id, title, message)
          VALUES (?, ?, ?, ?, ?, ?)`,
@@ -246,6 +317,9 @@ async function submitReview(req, res, next) {
       new_status: review_decision
     });
   } catch (err) {
+    if (err.status) {
+      return res.status(err.status).json({ error: err.message });
+    }
     next(err);
   }
 }

@@ -1,5 +1,5 @@
 import React from 'react';
-import { AlertTriangle, ShieldCheck } from 'lucide-react';
+import { ShieldCheck } from 'lucide-react';
 
 export default function Footer() {
   return (
@@ -19,30 +19,27 @@ export default function Footer() {
             <h4 className="text-white font-semibold text-xs uppercase tracking-wider mb-2">Project Features</h4>
             <ul className="space-y-1 text-slate-400">
               <li>• Verification Readiness Checklist</li>
-              <li>• Area-based Volunteer Matching</li>
-              <li>• Automated Status Audit History</li>
-              <li>• 15+ Advanced DBMS Demonstration Queries</li>
+              <li>• Volunteer Manual Document Review Queue</li>
+              <li>• Multi-Version Audit Trails & History</li>
+              <li>• ACID Transactions & Integrity Enforcement</li>
             </ul>
           </div>
 
           <div>
-            <h4 className="text-white font-semibold text-xs uppercase tracking-wider mb-2">Official Reminder</h4>
+            <h4 className="text-white font-semibold text-xs uppercase tracking-wider mb-2">Academic Context</h4>
             <p className="text-slate-400 text-xs leading-relaxed">
-              For official electoral registration, voter list verification, or official submissions, citizens must visit official government portals (e.g. voters.eci.gov.in).
+              Designed as an educational decision-support demonstration. Not an official Election Commission or government portal.
             </p>
           </div>
         </div>
 
-        {/* Mandated Academic Disclaimer Box */}
-        <div className="bg-slate-800/80 border border-slate-700 p-3.5 rounded-lg flex items-start gap-3">
-          <AlertTriangle className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
-          <p className="text-[11px] leading-normal text-amber-200/90 font-mono">
-            <strong>ACADEMIC PROJECT DISCLAIMER:</strong> SIRAssist is an academic project developed for citizen assistance and workflow demonstration. It is not an official government or Election Commission application. Information shown in this demo is fictional/sample data. Users should rely on official government sources for authoritative electoral information, eligibility, verification and submissions.
-          </p>
-        </div>
-
-        <div className="mt-6 pt-4 border-t border-slate-800 text-center text-[11px] text-slate-500">
-          © 2026 SIRAssist Academic DBMS Project. Built with React.js, Express, and MySQL 8.0.
+        <div className="pt-4 border-t border-slate-800 flex flex-col sm:flex-row items-center justify-between gap-2 text-[11px] text-slate-500">
+          <div>
+            <span className="font-semibold text-slate-400">SIRAssist | Academic Project</span> • Built with React.js, Express, and MySQL 8.0.
+          </div>
+          <div>
+            Sample / demonstration data only. Official submissions require authorized portals.
+          </div>
         </div>
       </div>
     </footer>

@@ -238,13 +238,6 @@ export default function CitizenDashboard() {
         </div>
       )}
 
-      {/* Academic Disclaimer Notice */}
-      <div className="disclaimer-banner">
-        <ShieldAlert className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
-        <div className="text-xs text-amber-800">
-          <strong>Academic Process Notice:</strong> Requests initiated on SIRAssist are organizational preparation and assistance workflows. This system does not claim or constitute official submission to the Election Commission of India. Official filings must be performed through authorized portals (voters.eci.gov.in).
-        </div>
-      </div>
 
       {/* Action Required: Document Correction Alert */}
       {uploadedDocs.some(d => d.file_review_status === 'Correction Required') && (

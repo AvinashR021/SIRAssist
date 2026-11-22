@@ -1,6 +1,6 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
-import { ShieldCheck, CheckSquare, Users, Database, FileText, AlertTriangle, ArrowRight } from 'lucide-react';
+import { ShieldCheck, CheckSquare, Users, Database, FileText, ArrowRight } from 'lucide-react';
 
 export default function Home() {
   return (
@@ -27,17 +27,6 @@ export default function Home() {
           </div>
         </div>
       </section>
-
-      {/* Mandatory Disclaimer Box */}
-      <div className="disclaimer-banner">
-        <AlertTriangle className="w-6 h-6 text-amber-600 shrink-0" />
-        <div>
-          <strong className="font-semibold text-amber-900">Academic Project Disclaimer:</strong>
-          <p className="text-xs text-amber-800 mt-0.5">
-            SIRAssist is an academic citizen-assistance project. It is NOT an official government or Election Commission application. Official electoral records, eligibility decisions, and submissions must be verified through authorized government channels (e.g. voters.eci.gov.in).
-          </p>
-        </div>
-      </div>
 
       {/* Key Problems Solved */}
       <section className="space-y-6">

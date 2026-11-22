@@ -33,6 +33,9 @@ export default function VolunteerDashboard() {
 
   // Document Review Queue States
   const [assignedDocs, setAssignedDocs] = useState([]);
+  const [pendingDocs, setPendingDocs] = useState([]);
+  const [historyDocs, setHistoryDocs] = useState([]);
+  const [reviewSubView, setReviewSubView] = useState('pending'); // 'pending' | 'history'
   const [docSummary, setDocSummary] = useState({ pending: 0, reviewed: 0, correction: 0, awaiting: 0 });
   const [loadingDocs, setLoadingDocs] = useState(true);
 
@@ -72,8 +75,13 @@ export default function VolunteerDashboard() {
     try {
       setLoadingDocs(true);
       const res = await API.get('/volunteer/document-reviews');
-      setAssignedDocs(res.data.documents || []);
-      setDocSummary(res.data.summary || { pending: 0, reviewed: 0, correction: 0, awaiting: 0 });
+      const docs = res.data.documents || [];
+      const pending = res.data.pending || docs.filter(d => d.assignment_status === 'Active' && (d.file_review_status === 'Pending Review' || d.file_review_status === 'Under Review' || !d.review_id));
+      const history = res.data.history || docs.filter(d => d.assignment_status === 'Completed' || d.file_review_status === 'Reviewed – No Issues Found' || Boolean(d.review_id));
+      setAssignedDocs(docs);
+      setPendingDocs(pending);
+      setHistoryDocs(history);
+      setDocSummary(res.data.summary || { pending: pending.length, reviewed: history.length, correction: 0, awaiting: 0 });
       setLoadingDocs(false);
     } catch (err) {
       console.error('Error fetching assigned document reviews:', err);
@@ -300,30 +308,70 @@ export default function VolunteerDashboard() {
             </div>
           </div>
 
-          {/* Academic Role Disclaimer */}
-          <div className="bg-blue-50 border border-blue-200 p-4 rounded-xl flex items-start gap-3">
-            <ShieldAlert className="w-5 h-5 text-blue-600 shrink-0 mt-0.5" />
-            <div className="text-xs text-blue-900 leading-relaxed">
-              <strong className="block text-sm font-bold text-blue-950 mb-0.5">Volunteer Verification Mandate:</strong>
-              As an authorized volunteer, you inspect document scans for <strong>legibility, completeness, and consistency</strong> with electoral requirements.
-              Volunteers do NOT make official statutory voter eligibility determinations or certify citizenship. Official status label is <em>"Reviewed – No Issues Found"</em>.
+          {/* Sub-View Navigation Tabs */}
+          <div className="flex flex-wrap items-center justify-between gap-3 bg-white p-3 rounded-xl border border-slate-200">
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setReviewSubView('pending')}
+                className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${
+                  reviewSubView === 'pending'
+                    ? 'bg-indigo-600 text-white shadow-sm'
+                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                }`}
+              >
+                <Clock className="w-3.5 h-3.5" />
+                Pending Reviews
+                <span className={`px-1.5 py-0.2 rounded-full text-[10px] ${
+                  reviewSubView === 'pending' ? 'bg-indigo-700 text-white' : 'bg-slate-200 text-slate-700'
+                }`}>
+                  {pendingDocs.length}
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setReviewSubView('history')}
+                className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${
+                  reviewSubView === 'history'
+                    ? 'bg-indigo-600 text-white shadow-sm'
+                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                }`}
+              >
+                <History className="w-3.5 h-3.5" />
+                Review History
+                <span className={`px-1.5 py-0.2 rounded-full text-[10px] ${
+                  reviewSubView === 'history' ? 'bg-indigo-700 text-white' : 'bg-slate-200 text-slate-700'
+                }`}>
+                  {historyDocs.length}
+                </span>
+              </button>
             </div>
+
+            <button
+              type="button"
+              onClick={fetchAssignedDocuments}
+              className="btn btn-outline btn-sm text-xs py-1"
+              disabled={loadingDocs}
+            >
+              Refresh Queue
+            </button>
           </div>
 
-          {/* Assigned Documents Table */}
+          {/* Table Container for Selected Sub-View */}
           <div className="card shadow-sm border-slate-200 overflow-hidden">
             <div className="card-header flex justify-between items-center">
-              <h2 className="card-title text-base flex items-center gap-2">
-                <CheckSquare className="w-5 h-5 text-indigo-600" />
-                Assigned Documents for Manual Review ({assignedDocs.length})
-              </h2>
-              <button
-                onClick={fetchAssignedDocuments}
-                className="btn btn-outline btn-sm text-xs py-1"
-                disabled={loadingDocs}
-              >
-                Refresh Queue
-              </button>
+              <div>
+                <h2 className="card-title text-base flex items-center gap-2">
+                  <CheckSquare className="w-5 h-5 text-indigo-600" />
+                  {reviewSubView === 'pending' ? 'Pending Reviews Queue' : 'Historical Document Reviews'}
+                </h2>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  {reviewSubView === 'pending'
+                    ? 'Documents with active assignments requiring your quality review and checklist verification.'
+                    : 'Completed and previous reviews performed by you (Read-Only archives).'}
+                </p>
+              </div>
             </div>
 
             <div className="table-container">
@@ -344,22 +392,23 @@ export default function VolunteerDashboard() {
                   {loadingDocs ? (
                     <tr>
                       <td colSpan="8" className="text-center py-8 text-slate-400">
-                        <Loader2 className="w-5 h-5 animate-spin inline mr-2 text-indigo-600" /> Loading assigned review queue...
+                        <Loader2 className="w-5 h-5 animate-spin inline mr-2 text-indigo-600" /> Loading reviews...
                       </td>
                     </tr>
-                  ) : assignedDocs.length === 0 ? (
+                  ) : (reviewSubView === 'pending' ? pendingDocs : historyDocs).length === 0 ? (
                     <tr>
                       <td colSpan="8" className="text-center py-10 text-slate-400">
                         <CheckCircle className="w-10 h-10 text-emerald-400 mx-auto mb-2" />
-                        <p className="font-semibold text-slate-700">No documents currently assigned for review.</p>
-                        <p className="text-xs text-slate-500 mt-1">
-                          Admins assign citizen verification documents to volunteers based on area and availability.
+                        <p className="font-semibold text-slate-700">
+                          {reviewSubView === 'pending'
+                            ? 'No documents currently pending review in your queue.'
+                            : 'No completed document reviews recorded in your history yet.'}
                         </p>
                       </td>
                     </tr>
                   ) : (
-                    assignedDocs.map(doc => {
-                      const isPending = doc.file_review_status === 'Pending Review';
+                    (reviewSubView === 'pending' ? pendingDocs : historyDocs).map(doc => {
+                      const isPending = doc.file_review_status === 'Pending Review' && doc.assignment_status === 'Active';
                       return (
                         <tr
                           key={doc.document_id}
@@ -738,7 +787,67 @@ export default function VolunteerDashboard() {
                   </div>
                 )}
 
-                {/* Manual Review Form (Form Phase 5) */}
+                {/* Manual Review Form (Form Phase 5) or Read-Only Completed Summary */}
+                {docDetailData?.is_read_only ? (
+                  <div className="space-y-3 text-xs border-t border-slate-100 pt-3">
+                    <div className="bg-emerald-50 border border-emerald-200 p-3 rounded-lg flex items-start gap-2.5">
+                      <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                      <div>
+                        <span className="font-bold text-emerald-950 block">Review Completed (Read-Only Mode)</span>
+                        <span className="text-[11px] text-emerald-800">
+                          This document review has been recorded and finalized. Further modifications are locked for audit integrity.
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="bg-slate-50 p-3 rounded-lg border border-slate-200 space-y-2">
+                      <div className="font-bold text-slate-700 flex justify-between items-center">
+                        <span>Latest Evaluation On Record</span>
+                        <span className="text-[10px] text-slate-400">
+                          v{activePreviewVersion?.version_number || selectedReviewDoc.current_version}
+                        </span>
+                      </div>
+
+                      <div>
+                        <span className="text-slate-500 block text-[11px]">Decision:</span>
+                        <span className="font-semibold text-slate-800">
+                          {activePreviewVersion?.review_decision || selectedReviewDoc.review_decision || selectedReviewDoc.file_review_status}
+                        </span>
+                      </div>
+
+                      {activePreviewVersion?.issue_category && activePreviewVersion.issue_category !== 'N/A' && (
+                        <div>
+                          <span className="text-slate-500 block text-[11px]">Issue Category:</span>
+                          <span className="font-semibold text-rose-700">{activePreviewVersion.issue_category}</span>
+                        </div>
+                      )}
+
+                      {activePreviewVersion?.feedback_message && (
+                        <div>
+                          <span className="text-slate-500 block text-[11px]">Volunteer Feedback:</span>
+                          <p className="bg-white p-2 rounded border border-slate-200 text-slate-700 text-xs mt-0.5">
+                            {activePreviewVersion.feedback_message}
+                          </p>
+                        </div>
+                      )}
+
+                      {activePreviewVersion?.additional_document_request && (
+                        <div>
+                          <span className="text-slate-500 block text-[11px]">Additional Document Requested:</span>
+                          <p className="bg-white p-2 rounded border border-slate-200 text-purple-800 text-xs mt-0.5">
+                            {activePreviewVersion.additional_document_request}
+                          </p>
+                        </div>
+                      )}
+
+                      {activePreviewVersion?.reviewed_at && (
+                        <div className="text-[10px] text-slate-400 pt-1 border-t border-slate-200">
+                          Reviewed on {new Date(activePreviewVersion.reviewed_at).toLocaleString()}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ) : (
                 <form onSubmit={handleSubmitReview} className="space-y-3 text-xs border-t border-slate-100 pt-3">
                   <div className="font-bold text-slate-800 uppercase tracking-wider text-[11px] flex items-center gap-1.5">
                     <Send className="w-3.5 h-3.5 text-indigo-600" />
@@ -857,6 +966,7 @@ export default function VolunteerDashboard() {
                     </button>
                   </div>
                 </form>
+                )}
 
                 {/* Prior Review History Section */}
                 {docDetailData?.versions && docDetailData.versions.length > 0 && (

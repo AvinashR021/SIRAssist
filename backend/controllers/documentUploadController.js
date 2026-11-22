@@ -2,6 +2,7 @@
  * SIRAssist – Document Upload Controller
  * Handles: citizen upload, listing, file streaming, resubmission.
  * All file access is gated behind authentication + ownership checks.
+ * Uses MySQL transactions and row-level locking (FOR UPDATE) to prevent concurrency anomalies.
  */
 const path = require('path');
 const fs   = require('fs');
@@ -46,12 +47,13 @@ async function uploadDocument(req, res, next) {
 
     // Atomic transaction: Insert Document and Document_Version
     const result = await db.executeTransaction(async (conn) => {
+      const docRefMasked = `UP-${Date.now().toString(36).toUpperCase()}-${Math.floor(100 + Math.random() * 900)}`;
       const [docRes] = await conn.query(
         `INSERT INTO Document
            (citizen_id, request_id, document_type, document_reference_masked, issue_date,
             current_version, file_review_status, description, verification_status)
          VALUES (?, ?, ?, ?, CURDATE(), 1, 'Pending Review', ?, 'Pending')`,
-        [citizenId, validRequestId, document_type.trim(), 'FILE-UPLOAD', description?.trim() || null]
+        [citizenId, validRequestId, document_type.trim(), docRefMasked, description?.trim() || null]
       );
       const documentId = docRes.insertId;
 
@@ -128,12 +130,25 @@ async function getDocumentDetail(req, res, next) {
       );
       authorized = docs.length > 0;
     } else if (role === 'VOLUNTEER' && volunteerId) {
+      // Check active or completed assignment, or previous review on record
       const assigned = await db.query(
         `SELECT assignment_id FROM Volunteer_Assignment
-         WHERE document_id = ? AND volunteer_id = ? AND status = 'Active'`,
+         WHERE document_id = ? AND volunteer_id = ? AND status IN ('Active', 'Completed')
+         LIMIT 1`,
         [documentId, volunteerId]
       );
-      authorized = assigned.length > 0;
+      if (assigned && assigned.length > 0) {
+        authorized = true;
+      } else {
+        const rev = await db.query(
+          `SELECT r.review_id FROM Document_Review r
+           JOIN Document_Version v ON v.version_id = r.version_id
+           WHERE v.document_id = ? AND r.volunteer_id = ?
+           LIMIT 1`,
+          [documentId, volunteerId]
+        );
+        authorized = rev && rev.length > 0;
+      }
     } else if (role === 'ADMIN') {
       authorized = true;
     }
@@ -174,6 +189,8 @@ async function getDocumentDetail(req, res, next) {
 }
 
 // ─── CITIZEN: Resubmit a corrected version ──────────────────────────────────
+// Uses row-level locking (SELECT ... FOR UPDATE) to eliminate version race conditions.
+// Automatically reactivates the volunteer assignment so the new version returns to the queue.
 async function resubmitDocument(req, res, next) {
   try {
     const citizenId  = req.user?.citizen_id;
@@ -192,25 +209,43 @@ async function resubmitDocument(req, res, next) {
       return res.status(400).json({ error: 'No corrected file uploaded.' });
     }
 
-    const docs = await db.query(
-      `SELECT document_id, citizen_id, file_review_status, current_version
-       FROM Document WHERE document_id = ? AND citizen_id = ?`,
-      [documentId, citizenId]
-    );
-    if (!docs || docs.length === 0) {
-      fs.unlinkSync(path.join(UPLOAD_DIR, req.file.filename));
-      return res.status(404).json({ error: 'Document not found or access denied.' });
-    }
+    const result = await db.executeTransaction(async (conn) => {
+      // 1. Lock Document row
+      const [docs] = await conn.query(
+        `SELECT document_id, citizen_id, file_review_status, current_version
+         FROM Document WHERE document_id = ? FOR UPDATE`,
+        [documentId]
+      );
+      if (!docs || docs.length === 0) {
+        const err = new Error('Document not found.');
+        err.status = 404;
+        throw err;
+      }
+      const doc = docs[0];
 
-    const doc = docs[0];
-    if (!['Correction Required', 'Additional Document Requested', 'Unable to Review'].includes(doc.file_review_status)) {
-      fs.unlinkSync(path.join(UPLOAD_DIR, req.file.filename));
-      return res.status(400).json({ error: `Resubmission not allowed for current review status: ${doc.file_review_status}` });
-    }
+      if (doc.citizen_id !== citizenId) {
+        const err = new Error('Access denied. You do not own this document.');
+        err.status = 403;
+        throw err;
+      }
 
-    const newVersion = doc.current_version + 1;
+      const allowedStatuses = ['Correction Required', 'Additional Document Requested', 'Unable to Review'];
+      if (!allowedStatuses.includes(doc.file_review_status)) {
+        const err = new Error(`Resubmission not permitted for current review status: ${doc.file_review_status}`);
+        err.status = 400;
+        throw err;
+      }
 
-    await db.executeTransaction(async (conn) => {
+      // 2. Lock latest version number to prevent concurrent race condition (Task 4)
+      const [verRows] = await conn.query(
+        `SELECT COALESCE(MAX(version_number), 0) AS max_v
+         FROM Document_Version WHERE document_id = ? FOR UPDATE`,
+        [documentId]
+      );
+      const latestVer = verRows[0]?.max_v || doc.current_version;
+      const newVersion = Math.max(doc.current_version, latestVer) + 1;
+
+      // 3. Insert new Document_Version
       await conn.query(
         `INSERT INTO Document_Version
            (document_id, version_number, storage_key, original_filename, mime_type, file_size_bytes, uploaded_by)
@@ -218,21 +253,64 @@ async function resubmitDocument(req, res, next) {
         [documentId, newVersion, req.file.filename, req.file.originalname, req.file.mimetype, req.file.size, userId]
       );
 
+      // 4. Update Document status to 'Pending Review' and increment current_version
       await conn.query(
-        `UPDATE Document SET current_version = ?, file_review_status = 'Pending Review', updated_at = NOW()
+        `UPDATE Document
+         SET current_version = ?, file_review_status = 'Pending Review', updated_at = NOW()
          WHERE document_id = ?`,
         [newVersion, documentId]
       );
+
+      // 5. TASK 3 FIX: Reactivate or preserve volunteer assignment
+      // Locate the most recent assignment for this document
+      const [assignments] = await conn.query(
+        `SELECT assignment_id, volunteer_id, status
+         FROM Volunteer_Assignment
+         WHERE document_id = ?
+         ORDER BY assignment_id DESC LIMIT 1 FOR UPDATE`,
+        [documentId]
+      );
+
+      let reactivatedVolunteerId = null;
+      if (assignments && assignments.length > 0) {
+        const lastAssign = assignments[0];
+        reactivatedVolunteerId = lastAssign.volunteer_id;
+
+        // Ensure this assignment is marked Active so it appears in the volunteer's Pending queue
+        await conn.query(
+          `UPDATE Volunteer_Assignment
+           SET status = 'Active', assigned_at = NOW()
+           WHERE assignment_id = ?`,
+          [lastAssign.assignment_id]
+        );
+
+        // Cancel any other conflicting assignments for this document
+        await conn.query(
+          `UPDATE Volunteer_Assignment
+           SET status = 'Cancelled'
+           WHERE document_id = ? AND assignment_id != ? AND status = 'Active'`,
+          [documentId, lastAssign.assignment_id]
+        );
+      }
+
+      return { newVersion, reactivatedVolunteerId };
     });
 
     res.json({
-      message: `Corrected document resubmitted successfully as Version ${newVersion}. Status reset to Pending Review.`,
-      version_number: newVersion,
-      status: 'Pending Review'
+      message: `Corrected document resubmitted successfully as Version ${result.newVersion}. Status reset to Pending Review.`,
+      version_number: result.newVersion,
+      status: 'Pending Review',
+      assigned_volunteer_id: result.reactivatedVolunteerId
     });
   } catch (err) {
     if (req.file) {
       try { fs.unlinkSync(path.join(UPLOAD_DIR, req.file.filename)); } catch {}
+    }
+    if (err.code === 'ER_DUP_ENTRY') {
+      return res.status(409).json({ error: 'A version conflict occurred due to concurrent uploads. Please try again.' });
+    }
+    if (err.status) {
+      return res.status(err.status).json({ error: err.message });
     }
     next(err);
   }
@@ -260,12 +338,26 @@ async function streamDocumentFile(req, res, next) {
       );
       allowed = rows.length > 0;
     } else if (role === 'VOLUNTEER' && volunteerId) {
+      // Volunteer is allowed if they have an Active OR Completed assignment for this document,
+      // or if they have reviewed any version of this document.
       const rows = await db.query(
         `SELECT va.assignment_id FROM Volunteer_Assignment va
-         WHERE va.document_id = ? AND va.volunteer_id = ? AND va.status = 'Active'`,
+         WHERE va.document_id = ? AND va.volunteer_id = ? AND va.status IN ('Active', 'Completed')
+         LIMIT 1`,
         [documentId, volunteerId]
       );
-      allowed = rows.length > 0;
+      if (rows && rows.length > 0) {
+        allowed = true;
+      } else {
+        const revRows = await db.query(
+          `SELECT r.review_id FROM Document_Review r
+           JOIN Document_Version v ON v.version_id = r.version_id
+           WHERE v.document_id = ? AND r.volunteer_id = ?
+           LIMIT 1`,
+          [documentId, volunteerId]
+        );
+        allowed = revRows && revRows.length > 0;
+      }
     } else if (role === 'ADMIN') {
       allowed = true;
     }
