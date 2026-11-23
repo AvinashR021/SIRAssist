@@ -347,6 +347,88 @@ export default function CitizenDashboard() {
         </div>
       </div>
 
+      {/* My Documents & Volunteer Review Status (Task 2 & 3) */}
+      <div className="card shadow-sm border-slate-200">
+        <div className="card-header">
+          <h2 className="card-title text-base flex items-center gap-2">
+            <FileCheck className="w-5 h-5 text-indigo-600" /> My Documents & Volunteer Review Status
+          </h2>
+          <Link to="/documents" className="text-xs text-blue-600 font-semibold hover:underline">
+            Upload & Manage All Documents →
+          </Link>
+        </div>
+
+        <div className="table-container">
+          <table className="table">
+            <thead>
+              <tr>
+                <th>Document</th>
+                <th>Version</th>
+                <th>Review Status</th>
+                <th>Assigned Volunteer</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {uploadedDocs.length === 0 ? (
+                <tr>
+                  <td colSpan="5" className="text-center py-6 text-slate-400 text-xs">
+                    No documents uploaded yet.{' '}
+                    <Link to="/documents" className="text-blue-600 underline font-semibold">
+                      Upload your first document
+                    </Link>{' '}
+                    to initiate volunteer verification.
+                  </td>
+                </tr>
+              ) : (
+                uploadedDocs.map(doc => (
+                  <tr key={doc.document_id}>
+                    <td>
+                      <div className="font-semibold text-slate-800 text-xs">{doc.document_type}</div>
+                      <span className="text-[10px] text-slate-400 font-mono">DOC#{doc.document_id}</span>
+                    </td>
+                    <td>
+                      <span className="font-mono text-[11px] font-bold bg-slate-100 text-slate-700 px-1.5 py-0.5 rounded border">
+                        v{doc.current_version || 1}
+                      </span>
+                    </td>
+                    <td>
+                      <span className={`badge badge-sm ${
+                        doc.file_review_status === 'Reviewed – No Issues Found' ? 'badge-resolved' :
+                        doc.file_review_status === 'Correction Required' ? 'badge-rejected' :
+                        doc.file_review_status === 'Under Review' ? 'badge-under_review' : 'badge-submitted'
+                      }`}>
+                        {doc.file_review_status || 'Pending Assignment'}
+                      </span>
+                    </td>
+                    <td className="text-xs">
+                      {doc.assigned_volunteer_name ? (
+                        <div className="flex items-center gap-1.5">
+                          <span className="font-semibold text-indigo-700">{doc.assigned_volunteer_name}</span>
+                          <span className="text-[10px] text-slate-400 font-mono">(VOL#{doc.assigned_volunteer_id})</span>
+                        </div>
+                      ) : (
+                        <span className="text-slate-400 italic text-[11px]">Not Assigned Yet</span>
+                      )}
+                    </td>
+                    <td>
+                      <Link
+                        to="/documents"
+                        state={{ highlightDocId: doc.document_id }}
+                        className="btn btn-outline btn-sm text-xs py-1 px-2.5"
+                      >
+                        <Eye className="w-3.5 h-3.5 mr-1" />
+                        {doc.feedback_message ? 'View Feedback' : 'View'}
+                      </Link>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
       {/* FORM 5 MODAL: Create Verification Request */}
       {showCreateReqModal && (
         <div className="modal-overlay">

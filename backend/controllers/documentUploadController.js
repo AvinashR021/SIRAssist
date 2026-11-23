@@ -94,12 +94,26 @@ async function getMyDocuments(req, res, next) {
          v.version_id, v.original_filename, v.file_size_bytes, v.mime_type, v.uploaded_at AS file_uploaded_at,
          r.review_id, r.review_decision, r.issue_category, r.feedback_message,
          r.additional_document_request, r.reviewed_at,
-         vol.name AS reviewer_name
+         vol.name AS reviewer_name,
+         va_latest.volunteer_id AS assigned_volunteer_id,
+         va_latest.status AS assignment_status,
+         va_latest.assigned_at AS assignment_date,
+         asgn_vol.name AS assigned_volunteer_name,
+         asgn_vol.email AS assigned_volunteer_email,
+         asgn_vol.mobile AS assigned_volunteer_mobile
        FROM Document d
        LEFT JOIN Document_Version v
          ON v.document_id = d.document_id AND v.version_number = d.current_version
        LEFT JOIN Document_Review r ON r.version_id = v.version_id
        LEFT JOIN Volunteer vol ON vol.volunteer_id = r.volunteer_id
+       LEFT JOIN Volunteer_Assignment va_latest
+         ON va_latest.assignment_id = (
+           SELECT MAX(va2.assignment_id)
+           FROM Volunteer_Assignment va2
+           WHERE va2.document_id = d.document_id
+             AND va2.status IN ('Active', 'Completed')
+         )
+       LEFT JOIN Volunteer asgn_vol ON asgn_vol.volunteer_id = va_latest.volunteer_id
        WHERE d.citizen_id = ?
        ORDER BY d.document_id DESC`,
       [citizenId]
@@ -158,9 +172,23 @@ async function getDocumentDetail(req, res, next) {
     }
 
     const docRows = await db.query(
-      `SELECT d.*, c.name AS citizen_name, c.email AS citizen_email
+      `SELECT d.*, c.name AS citizen_name, c.email AS citizen_email,
+              va_latest.volunteer_id AS assigned_volunteer_id,
+              va_latest.status AS assignment_status,
+              va_latest.assigned_at AS assignment_date,
+              asgn_vol.name AS assigned_volunteer_name,
+              asgn_vol.email AS assigned_volunteer_email,
+              asgn_vol.mobile AS assigned_volunteer_mobile
        FROM Document d
        JOIN Citizen c ON c.citizen_id = d.citizen_id
+       LEFT JOIN Volunteer_Assignment va_latest
+         ON va_latest.assignment_id = (
+           SELECT MAX(va2.assignment_id)
+           FROM Volunteer_Assignment va2
+           WHERE va2.document_id = d.document_id
+             AND va2.status IN ('Active', 'Completed')
+         )
+       LEFT JOIN Volunteer asgn_vol ON asgn_vol.volunteer_id = va_latest.volunteer_id
        WHERE d.document_id = ?`,
       [documentId]
     );

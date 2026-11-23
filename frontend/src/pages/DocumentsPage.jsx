@@ -292,6 +292,7 @@ export default function DocumentsPage() {
                     <th>Version</th>
                     <th>Uploaded File</th>
                     <th>Uploaded Date</th>
+                    <th>Assigned Volunteer</th>
                     <th>Review Status</th>
                     <th>Volunteer Feedback</th>
                     <th className="text-right">Actions</th>
@@ -300,13 +301,13 @@ export default function DocumentsPage() {
                 <tbody>
                   {loading ? (
                     <tr>
-                      <td colSpan="8" className="text-center py-8 text-slate-400">
+                      <td colSpan="9" className="text-center py-8 text-slate-400">
                         <Loader2 className="w-5 h-5 animate-spin inline mr-2 text-blue-600" /> Loading your documents...
                       </td>
                     </tr>
                   ) : uploadedDocs.length === 0 ? (
                     <tr>
-                      <td colSpan="8" className="text-center py-10 text-slate-400">
+                      <td colSpan="9" className="text-center py-10 text-slate-400">
                         <FileCheck2 className="w-10 h-10 text-slate-300 mx-auto mb-2" />
                         <p className="font-semibold text-slate-700">No document files uploaded yet.</p>
                         <p className="text-xs text-slate-500 mt-1">
@@ -354,6 +355,26 @@ export default function DocumentsPage() {
                           </td>
                           <td className="text-xs text-slate-500">
                             {doc.uploaded_at ? new Date(doc.uploaded_at).toLocaleDateString() : '—'}
+                          </td>
+                          <td className="text-xs">
+                            {doc.assigned_volunteer_name ? (
+                              <div className="flex flex-col gap-0.5">
+                                <span className="font-semibold text-indigo-700">{doc.assigned_volunteer_name}</span>
+                                {doc.assignment_status && (
+                                  <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded inline-block w-fit
+                                    ${doc.assignment_status === 'Active' ? 'bg-blue-50 text-blue-700 border border-blue-200' : 'bg-slate-100 text-slate-500 border border-slate-200'}`}>
+                                    {doc.assignment_status}
+                                  </span>
+                                )}
+                                {doc.assignment_date && (
+                                  <span className="text-[10px] text-slate-400">
+                                    Since {new Date(doc.assignment_date).toLocaleDateString()}
+                                  </span>
+                                )}
+                              </div>
+                            ) : (
+                              <span className="text-slate-400 italic text-[11px]">Waiting for assignment</span>
+                            )}
                           </td>
                           <td>
                             {getStatusBadge(doc.file_review_status)}
@@ -776,6 +797,39 @@ export default function DocumentsPage() {
 
               {/* Right Column: Version History & Volunteer Reviews */}
               <div className="md:col-span-5 p-4 space-y-4 bg-white overflow-y-auto max-h-[560px]">
+                {/* Assigned Volunteer Details Card (Task 3) */}
+                {historyDoc.document?.assigned_volunteer_name ? (
+                  <div className="bg-indigo-50/70 border border-indigo-200 rounded-lg p-3 text-xs">
+                    <div className="flex justify-between items-start">
+                      <div>
+                        <span className="text-slate-500 block text-[10px] uppercase font-bold tracking-wider">Assigned Reviewer</span>
+                        <span className="font-bold text-indigo-900 text-sm">{historyDoc.document.assigned_volunteer_name}</span>
+                        <span className="text-slate-500 font-mono text-[11px] ml-2">(VOL#{historyDoc.document.assigned_volunteer_id})</span>
+                      </div>
+                      <span className={`text-[10px] font-semibold px-2 py-0.5 rounded border ${
+                        historyDoc.document.assignment_status === 'Active' 
+                          ? 'bg-blue-100 text-blue-800 border-blue-200' 
+                          : 'bg-emerald-100 text-emerald-800 border-emerald-200'
+                      }`}>
+                        {historyDoc.document.assignment_status}
+                      </span>
+                    </div>
+                    {historyDoc.document.assignment_date && (
+                      <span className="text-[10px] text-slate-500 block mt-1">
+                        Assigned on {new Date(historyDoc.document.assignment_date).toLocaleDateString()}
+                      </span>
+                    )}
+                  </div>
+                ) : (
+                  <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-800 flex items-center justify-between">
+                    <div>
+                      <span className="font-semibold block">Waiting for volunteer assignment</span>
+                      <span className="text-[10px] text-amber-600">An administrator will assign an approved volunteer shortly.</span>
+                    </div>
+                    <span className="bg-amber-200/60 text-amber-900 text-[10px] font-bold px-2 py-0.5 rounded">Pending</span>
+                  </div>
+                )}
+
                 <div>
                   <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-2">
                     Version & Review History ({historyDoc.versions?.length || 0})
