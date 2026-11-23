@@ -33,8 +33,25 @@ function requireRole(...roles) {
   };
 }
 
+function optionalAuth(req, res, next) {
+  const authHeader = req.headers['authorization'];
+  if (!authHeader) {
+    req.user = null;
+    return next();
+  }
+  const token = authHeader.startsWith('Bearer ') ? authHeader.substring(7) : authHeader;
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+    req.user = decoded;
+  } catch (err) {
+    req.user = null;
+  }
+  next();
+}
+
 module.exports = {
   verifyToken,
   requireRole,
+  optionalAuth,
   JWT_SECRET
 };

@@ -21,8 +21,8 @@ export default function Home() {
             <Link to="/register" className="btn btn-primary bg-blue-500 hover:bg-blue-600 border-none px-6 py-3 text-base">
               Get Started <ArrowRight className="w-4 h-4" />
             </Link>
-            <Link to="/demo" className="btn btn-outline border-slate-600 text-white hover:bg-white/10 px-6 py-3 text-base">
-              <Database className="w-4 h-4 text-indigo-400" /> Explore DBMS Showcase
+            <Link to="/explorer" className="btn btn-outline border-slate-600 text-white hover:bg-white/10 px-6 py-3 text-base">
+              <Database className="w-4 h-4 text-indigo-400" /> Explore Database Explorer
             </Link>
           </div>
         </div>

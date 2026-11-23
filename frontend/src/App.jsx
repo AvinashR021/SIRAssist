@@ -37,6 +37,7 @@ export default function App() {
           <Route path="/login" element={<Login />} />
           <Route path="/register" element={<Register />} />
           <Route path="/demo" element={<DbmsDemoPage />} />
+          <Route path="/explorer" element={<DbmsDemoPage />} />
 
           {/* Citizen Protected Routes */}
           <Route

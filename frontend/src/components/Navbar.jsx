@@ -80,7 +80,7 @@ export default function Navbar() {
           <nav className="hidden md:flex items-center space-x-6 text-sm font-medium text-slate-600">
             <Link to="/" className="hover:text-blue-600 flex items-center gap-1">Home</Link>
             <Link to="/demo" className="hover:text-blue-600 flex items-center gap-1 text-indigo-600 font-semibold">
-              <Database className="w-4 h-4" /> DBMS Showcase
+              <Database className="w-4 h-4" /> Database Explorer
             </Link>
 
             {user && user.role === 'CITIZEN' && (

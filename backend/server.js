@@ -16,6 +16,7 @@ const notificationRoutes = require('./routes/notificationRoutes');
 const adminRoutes = require('./routes/adminRoutes');
 const demoRoutes = require('./routes/demoRoutes');
 const reviewRoutes = require('./routes/reviewRoutes');
+const explorerRoutes = require('./routes/explorerRoutes');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -47,6 +48,7 @@ app.use('/api/volunteers', volunteerRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/demo', demoRoutes);
+app.use('/api/explorer', explorerRoutes);
 
 // Volunteer Document Review Workflow Endpoints (supports both singular and plural)
 app.use('/api/volunteer/document-reviews', reviewRoutes);
