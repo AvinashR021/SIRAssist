@@ -53,7 +53,7 @@ async function uploadDocument(req, res, next) {
         `INSERT INTO Document
            (citizen_id, request_id, document_type, document_reference_masked, issue_date,
             current_version, file_review_status, description, verification_status)
-         VALUES (?, ?, ?, ?, CURDATE(), 1, 'Pending Review', ?, 'Pending')`,
+         VALUES (?, ?, ?, ?, CURDATE(), 1, 'Pending Assignment', ?, 'Pending')`,
         [citizenId, validRequestId, document_type.trim(), docRefMasked, description?.trim() || null]
       );
       const documentId = docRes.insertId;
@@ -66,7 +66,13 @@ async function uploadDocument(req, res, next) {
       );
 
       // Automated Region-Based Volunteer Assignment (Priority 2)
-      const assignment = await autoAssignDocument(documentId, citizenId, conn);
+      // Upload must NOT fail if regional volunteer assignment fails or if no volunteer is available
+      let assignment = null;
+      try {
+        assignment = await autoAssignDocument(documentId, citizenId, conn);
+      } catch (assignErr) {
+        console.error('Regional auto-assignment warning (fallback to Pending Assignment):', assignErr);
+      }
 
       return { documentId, assignment };
     });
@@ -74,10 +80,10 @@ async function uploadDocument(req, res, next) {
     res.status(201).json({
       message: result.assignment
         ? `Document uploaded successfully and assigned to ${result.assignment.volunteer_name}.`
-        : 'Document uploaded successfully. It is queued for volunteer review.',
+        : 'Document uploaded successfully. It is queued for volunteer assignment.',
       document_id: result.documentId,
       version_number: 1,
-      status: 'Pending Review',
+      status: result.assignment ? 'Pending Review' : 'Pending Assignment',
       assigned_volunteer: result.assignment ? {
         volunteer_id: result.assignment.volunteer_id,
         volunteer_name: result.assignment.volunteer_name,

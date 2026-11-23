@@ -55,10 +55,10 @@ async function createAssignment(req, res, next) {
         [docId]
       );
 
-      // 4. Create new Active assignment (record admin user_id as assigned_by)
+      // 4. Create new Active assignment (record admin user_id as assigned_by, method MANUAL)
       const [insRes] = await conn.query(
-        `INSERT INTO Volunteer_Assignment (document_id, volunteer_id, assigned_by, status, assigned_at)
-         VALUES (?, ?, ?, 'Active', NOW())`,
+        `INSERT INTO Volunteer_Assignment (document_id, volunteer_id, assigned_by, status, assignment_method, assigned_at)
+         VALUES (?, ?, ?, 'Active', 'MANUAL', NOW())`,
         [docId, volId, adminUserId]
       );
 

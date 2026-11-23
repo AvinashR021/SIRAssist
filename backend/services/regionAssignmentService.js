@@ -174,18 +174,11 @@ async function autoAssignDocument(documentId, citizenId, connection) {
 
   if (matchResult.volunteer && matchResult.volunteer.volunteer_id) {
     const vol = matchResult.volunteer;
-    // Fetch system admin user ID for automated regional assignment (assigned_by is required NOT NULL)
-    const adminRows = await runQuery(
-      connection,
-      `SELECT user_id FROM User_Account WHERE role = 'ADMIN' ORDER BY user_id ASC LIMIT 1`
-    );
-    const systemAdminId = adminRows?.[0]?.user_id || 1;
-
     // Create Active Volunteer_Assignment
     const [insRes] = await connection.query(
-      `INSERT INTO Volunteer_Assignment (document_id, volunteer_id, assigned_by, status, assigned_at)
-       VALUES (?, ?, ?, 'Active', NOW())`,
-      [documentId, vol.volunteer_id, systemAdminId]
+      `INSERT INTO Volunteer_Assignment (document_id, volunteer_id, assigned_by, status, assignment_method, assigned_at)
+       VALUES (?, ?, NULL, 'Active', 'AUTO', NOW())`,
+      [documentId, vol.volunteer_id]
     );
 
     // Update document status

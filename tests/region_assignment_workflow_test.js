@@ -9,8 +9,8 @@
  *   Test F: Admin Regional Assignment Recommendations & Manual Override
  */
 const http = require('http');
-const db   = require('../backend/db/connection');
-const app  = require('../backend/server');
+const db = require('../backend/db/connection');
+const app = require('../backend/server');
 
 const PORT = 5099;
 const BASE_URL = `http://localhost:${PORT}/api`;
@@ -101,9 +101,12 @@ async function runTests() {
   server = app.listen(PORT, async () => {
     try {
       // 0. Snapshot SIR core counts for immutability check
-      const initialCit = await db.query('SELECT COUNT(*) AS count FROM Citizen');
-      const initialVot = await db.query('SELECT COUNT(*) AS count FROM Voter_Record');
-      const initialReq = await db.query('SELECT COUNT(*) AS count FROM Verification_Request');
+      const initialCitRows = await db.query('SELECT COUNT(*) AS count FROM Citizen');
+      const initialVotRows = await db.query('SELECT COUNT(*) AS count FROM Voter_Record');
+      const initialReqRows = await db.query('SELECT COUNT(*) AS count FROM Verification_Request');
+      const initialCitCount = initialCitRows[0].count;
+      const initialVotCount = initialVotRows[0].count;
+      const initialReqCount = initialReqRows[0].count;
 
       // --- Authenticate roles ---
       const citLogin = await request('POST', '/auth/login', {}, { email: 'ramesh.k@example.com', password: 'password123' });
@@ -270,13 +273,13 @@ async function runTests() {
       assert(unauthRes.status === 401, 'Test E3: Unauthenticated document access blocked (401)');
 
       // Verify core SIR records are immutable
-      const finalCit = await db.query('SELECT COUNT(*) AS count FROM Citizen');
-      const finalVot = await db.query('SELECT COUNT(*) AS count FROM Voter_Record');
-      const finalReq = await db.query('SELECT COUNT(*) AS count FROM Verification_Request');
+      const finalCitRows = await db.query('SELECT COUNT(*) AS count FROM Citizen');
+      const finalVotRows = await db.query('SELECT COUNT(*) AS count FROM Voter_Record');
+      const finalReqRows = await db.query('SELECT COUNT(*) AS count FROM Verification_Request');
       assert(
-        initialCit[0].count === finalCit[0].count &&
-        initialVot[0].count === finalVot[0].count &&
-        initialReq[0].count === finalReq[0].count,
+        initialCitCount === finalCitRows[0].count &&
+        initialVotCount === finalVotRows[0].count &&
+        initialReqCount === finalReqRows[0].count,
         'Test E4: Existing SIR records remain completely preserved and unchanged'
       );
 
@@ -314,3 +317,4 @@ async function runTests() {
 }
 
 runTests();
+
