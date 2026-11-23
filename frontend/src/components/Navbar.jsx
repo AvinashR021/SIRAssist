@@ -2,6 +2,7 @@ import React, { useContext, useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { AuthContext } from '../context/AuthContext';
 import API from '../services/api';
+import rvceLogo from '../assets/rvce-logo.png';
 import {
   ShieldCheck,
   Bell,
@@ -65,12 +66,20 @@ export default function Navbar() {
     <header className="bg-white border-b border-slate-200 sticky top-0 z-40 shadow-sm">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex justify-between h-16 items-center">
-          {/* Brand Logo */}
-          <Link to="/" className="flex items-center gap-2 text-blue-700 font-bold text-xl hover:text-blue-800 transition">
-            <ShieldCheck className="w-7 h-7 text-blue-600" />
-            <div>
-              <span>SIRAssist</span>
-              <span className="block text-[10px] text-slate-500 font-normal tracking-wide">CITIZEN ASSISTANCE PLATFORM</span>
+          {/* Top-Left: Brand Logo with RVCE Institution Logo */}
+          <Link to="/" className="flex items-center gap-3 group text-blue-700 font-bold text-xl hover:text-blue-800 transition">
+            <img
+              src={rvceLogo}
+              alt="RV College of Engineering"
+              className="h-10 sm:h-11 w-auto object-contain transition-transform group-hover:scale-105"
+            />
+            <div className="h-8 w-[1.5px] bg-slate-200 hidden sm:block" />
+            <div className="flex items-center gap-2">
+              <ShieldCheck className="w-6 h-6 text-blue-600 hidden md:block" />
+              <div>
+                <span className="block leading-tight text-lg sm:text-xl font-bold tracking-tight">SIRAssist</span>
+                <span className="block text-[9px] text-slate-500 font-normal tracking-wide">CITIZEN ASSISTANCE PLATFORM</span>
+              </div>
             </div>
           </Link>
 

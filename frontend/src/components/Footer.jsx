@@ -1,5 +1,6 @@
 import React from 'react';
 import { ShieldCheck } from 'lucide-react';
+import rvceLogo from '../assets/rvce-logo.png';
 
 export default function Footer() {
   return (
@@ -7,6 +8,9 @@ export default function Footer() {
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
           <div>
+            <div className="bg-white/95 p-1.5 rounded-lg inline-block mb-3 shadow-sm">
+              <img src={rvceLogo} alt="RV College of Engineering" className="h-8 w-auto object-contain" />
+            </div>
             <div className="flex items-center gap-2 text-white font-bold text-base mb-2">
               <ShieldCheck className="w-5 h-5 text-blue-400" /> SIRAssist
             </div>
