@@ -9,25 +9,25 @@ import {
   Title,
   Tooltip,
   Legend,
-  ArcElement,
-  PointElement,
-  LineElement
+  ArcElement
 } from 'chart.js';
-import { Bar, Pie, Line, Doughnut } from 'react-chartjs-2';
+import { Doughnut, Bar } from 'react-chartjs-2';
 import {
   Shield,
   Users,
   FileText,
-  CheckCircle2,
   UserCheck,
-  Settings,
-  Search,
-  Edit3,
-  ExternalLink,
-  AlertCircle,
-  XCircle,
+  CheckCircle2,
+  Clock,
+  Filter,
+  RefreshCw,
   Loader2,
-  PlayCircle
+  X,
+  AlertCircle,
+  MapPin,
+  Eye,
+  FileCheck2,
+  SlidersHorizontal
 } from 'lucide-react';
 
 ChartJS.register(
@@ -35,46 +35,36 @@ ChartJS.register(
   LinearScale,
   BarElement,
   ArcElement,
-  PointElement,
-  LineElement,
   Title,
   Tooltip,
   Legend
 );
 
 export default function AdminDashboard() {
-  const [stats, setStats] = useState(null);
-  const [requests, setRequests] = useState([]);
-  const [volunteers, setVolunteers] = useState([]);
-  const [citizens, setCitizens] = useState([]);
-  const [requirements, setRequirements] = useState([]);
-  const [assistanceRequests, setAssistanceRequests] = useState([]);
-  const [adminDocs, setAdminDocs] = useState([]);
-  const [docAssignments, setDocAssignments] = useState([]);
+  // 5 Main Tabs (Priority 5)
+  const [activeTab, setActiveTab] = useState('overview'); // 'overview' | 'assignments' | 'citizens' | 'volunteers' | 'reports'
 
-  const [activeTab, setActiveTab] = useState('requests');
-  const [searchQuery, setSearchQuery] = useState('');
-  const [statusFilter, setStatusFilter] = useState('');
+  const [stats, setStats] = useState(null);
+  const [adminDocs, setAdminDocs] = useState([]);
+  const [citizens, setCitizens] = useState([]);
+  const [volunteers, setVolunteers] = useState([]);
+  const [requests, setRequests] = useState([]);
   const [loading, setLoading] = useState(true);
 
-  // Status Change Modal (Form 9)
-  const [selectedReq, setSelectedReq] = useState(null);
-  const [newStatus, setNewStatus] = useState('UNDER_REVIEW');
-  const [statusRemarks, setStatusRemarks] = useState('');
-  const [statusModalError, setStatusModalError] = useState('');
-  const [updatingStatus, setUpdatingStatus] = useState(false);
+  // Regional Filters for Document Assignments
+  const [filterDistrict, setFilterDistrict] = useState('');
+  const [filterConstituency, setFilterConstituency] = useState('');
+  const [filterArea, setFilterArea] = useState('');
+  const [filterStatus, setFilterStatus] = useState('');
 
-  // Assign Volunteer to Assistance Request Modal
-  const [selectedAssistId, setSelectedAssistId] = useState(null);
-  const [selectedVolId, setSelectedVolId] = useState('');
-  const [assignModalError, setAssignModalError] = useState('');
-  const [assigningVol, setAssigningVol] = useState(false);
-
-  // Assign Volunteer to Document Review Modal
+  // Assignment / Reassignment Modal
   const [selectedDocForAssign, setSelectedDocForAssign] = useState(null);
-  const [selectedDocVolId, setSelectedDocVolId] = useState('');
-  const [docAssignError, setDocAssignError] = useState('');
-  const [assigningDocVol, setAssigningDocVol] = useState(false);
+  const [eligibleVolunteersData, setEligibleVolunteersData] = useState(null);
+  const [loadingEligible, setLoadingEligible] = useState(false);
+  const [selectedVolunteerId, setSelectedVolunteerId] = useState('');
+  const [assigningVolunteer, setAssigningVolunteer] = useState(false);
+  const [assignError, setAssignError] = useState('');
+  const [assignSuccess, setAssignSuccess] = useState('');
 
   useEffect(() => {
     fetchAdminData();
@@ -83,501 +73,418 @@ export default function AdminDashboard() {
   const fetchAdminData = async () => {
     try {
       setLoading(true);
-      const [statRes, reqRes, volRes, citRes, reqmRes, assistRes, docRes, assignRes] = await Promise.all([
-        API.get('/admin/statistics'),
-        API.get('/requests'),
-        API.get('/volunteers'),
-        API.get('/admin/citizens'),
-        API.get('/documents/requirements'),
-        API.get('/assistance'),
+      const [statRes, docRes, citRes, volRes, reqRes] = await Promise.all([
+        API.get('/admin/statistics').catch(() => ({ data: null })),
         API.get('/admin/documents').catch(() => ({ data: [] })),
-        API.get('/admin/volunteer-assignments').catch(() => ({ data: [] }))
+        API.get('/admin/citizens').catch(() => ({ data: [] })),
+        API.get('/volunteers').catch(() => ({ data: [] })),
+        API.get('/requests').catch(() => ({ data: [] }))
       ]);
 
       setStats(statRes.data);
-      setRequests(reqRes.data);
-      setVolunteers(volRes.data);
-      setCitizens(citRes.data);
-      setRequirements(reqmRes.data);
-      setAssistanceRequests(assistRes.data);
       setAdminDocs(docRes.data || []);
-      setDocAssignments(assignRes.data || []);
+      setCitizens(citRes.data || []);
+      setVolunteers(volRes.data || []);
+      setRequests(reqRes.data || []);
       setLoading(false);
     } catch (err) {
-      console.error(err);
+      console.error('Failed to load admin data:', err);
       setLoading(false);
     }
   };
 
-  // State Transition Matrix
-  const ALLOWED_TRANSITIONS = {
-    DRAFT: ['SUBMITTED', 'CANCELLED'],
-    SUBMITTED: ['DOCUMENTS_PENDING', 'UNDER_REVIEW', 'CANCELLED'],
-    DOCUMENTS_PENDING: ['DOCUMENTS_SUBMITTED', 'UNDER_REVIEW', 'CANCELLED'],
-    DOCUMENTS_SUBMITTED: ['UNDER_REVIEW', 'DOCUMENTS_PENDING', 'CANCELLED'],
-    UNDER_REVIEW: ['RESOLVED', 'DOCUMENTS_PENDING', 'CANCELLED'],
-    RESOLVED: ['UNDER_REVIEW'], // Re-open
-    CANCELLED: []
+  // Open Assignment modal & fetch region-ranked volunteers
+  const openAssignModal = async (doc) => {
+    setSelectedDocForAssign(doc);
+    setSelectedVolunteerId(doc.volunteer_id ? String(doc.volunteer_id) : '');
+    setAssignError('');
+    setAssignSuccess('');
+    setLoadingEligible(true);
+
+    try {
+      const res = await API.get(`/admin/documents/${doc.document_id}/eligible-volunteers`);
+      setEligibleVolunteersData(res.data);
+      if (!doc.volunteer_id && res.data.volunteers?.length > 0) {
+        setSelectedVolunteerId(String(res.data.volunteers[0].volunteer_id));
+      }
+    } catch (err) {
+      console.error('Failed to load eligible volunteers:', err);
+      setAssignError('Unable to load regional volunteer recommendations.');
+    } finally {
+      setLoadingEligible(false);
+    }
   };
 
-  const handleOpenStatusModal = (req) => {
-    setSelectedReq(req);
-    const available = ALLOWED_TRANSITIONS[req.current_status] || [];
-    setNewStatus(available.length > 0 ? available[0] : req.current_status);
-    setStatusRemarks('');
-    setStatusModalError('');
-  };
-
-  // FORM 9 Submission: Update Request Status with Transaction
-  const handleUpdateStatus = async (e) => {
+  const handleAssignSubmit = async (e) => {
     e.preventDefault();
-    if (!selectedReq) return;
-
-    if (statusRemarks && statusRemarks.length > 500) {
-      setStatusModalError('Remarks cannot exceed 500 characters.');
+    if (!selectedVolunteerId) {
+      setAssignError('Please select a volunteer.');
       return;
     }
 
-    setUpdatingStatus(true);
-    setStatusModalError('');
-
+    setAssigningVolunteer(true);
+    setAssignError('');
     try {
-      await API.put(`/requests/${selectedReq.request_id}/status`, {
-        status: newStatus,
-        remarks: statusRemarks.trim() || undefined
+      await API.post('/admin/volunteer-assignments', {
+        document_id: selectedDocForAssign.document_id,
+        volunteer_id: parseInt(selectedVolunteerId)
       });
-      setSelectedReq(null);
-      setStatusRemarks('');
-      fetchAdminData();
+
+      setAssignSuccess('Assignment successfully saved in MySQL.');
+      setAssigningVolunteer(false);
+
+      // Refresh documents
+      const refreshed = await API.get('/admin/documents');
+      setAdminDocs(refreshed.data || []);
+
+      setTimeout(() => {
+        setSelectedDocForAssign(null);
+        setAssignSuccess('');
+      }, 1200);
     } catch (err) {
-      setStatusModalError(err.response?.data?.error || 'Failed to update request status.');
-    } finally {
-      setUpdatingStatus(false);
+      setAssignError(err.response?.data?.error || 'Failed to assign volunteer.');
+      setAssigningVolunteer(false);
     }
   };
 
-  const handleAssignVolunteer = async (e) => {
-    e.preventDefault();
-    if (!selectedVolId) {
-      setAssignModalError('Please select a volunteer.');
-      return;
+  // Distinct Filter Options
+  const districtOptions = Array.from(new Set(adminDocs.map(d => d.district).filter(Boolean)));
+  const constituencyOptions = Array.from(
+    new Set(
+      adminDocs
+        .filter(d => !filterDistrict || d.district === filterDistrict)
+        .map(d => d.constituency_name)
+        .filter(Boolean)
+    )
+  );
+  const areaOptions = Array.from(
+    new Set(
+      adminDocs
+        .filter(d => !filterDistrict || d.district === filterDistrict)
+        .map(d => d.area_name)
+        .filter(Boolean)
+    )
+  );
+
+  // Filtered Documents for Document Assignments table
+  const filteredDocs = adminDocs.filter(d => {
+    if (filterDistrict && d.district !== filterDistrict) return false;
+    if (filterConstituency && d.constituency_name !== filterConstituency) return false;
+    if (filterArea && d.area_name !== filterArea) return false;
+    if (filterStatus) {
+      if (filterStatus === 'Assigned' && !d.assigned_volunteer) return false;
+      if (filterStatus === 'Pending Assignment' && d.assigned_volunteer) return false;
     }
-
-    setAssigningVol(true);
-    setAssignModalError('');
-    try {
-      await API.post('/admin/assign-volunteer', {
-        assistance_id: selectedAssistId,
-        volunteer_id: selectedVolId
-      });
-      setSelectedAssistId(null);
-      setSelectedVolId('');
-      fetchAdminData();
-    } catch (err) {
-      setAssignModalError(err.response?.data?.error || 'Failed to assign volunteer.');
-    } finally {
-      setAssigningVol(false);
-    }
-  };
-
-  if (loading) return <div className="p-8 text-center text-xs text-slate-500">Loading admin analytics dashboard...</div>;
-
-  // Chart Data Formatting
-  const statusChartData = {
-    labels: stats?.charts?.statusChart?.map(s => s.label) || [],
-    datasets: [{
-      label: 'Requests by Status',
-      data: stats?.charts?.statusChart?.map(s => s.count) || [],
-      backgroundColor: ['#0284c7', '#f59e0b', '#c084fc', '#10b981', '#ef4444']
-    }]
-  };
-
-  const areaChartData = {
-    labels: stats?.charts?.areaChart?.map(a => a.label) || [],
-    datasets: [{
-      label: 'Requests by District',
-      data: stats?.charts?.areaChart?.map(a => a.count) || [],
-      backgroundColor: '#3b82f6'
-    }]
-  };
-
-  const categoryChartData = {
-    labels: stats?.charts?.categoryChart?.map(c => c.label) || [],
-    datasets: [{
-      data: stats?.charts?.categoryChart?.map(c => c.count) || [],
-      backgroundColor: ['#8b5cf6', '#ec4899', '#3b82f6', '#10b981']
-    }]
-  };
-
-  const filteredRequests = requests.filter(r => {
-    const matchSearch = (r.request_type || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
-                        (r.citizen_name || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
-                        r.request_id.toString().includes(searchQuery);
-    const matchStatus = !statusFilter || r.current_status === statusFilter;
-    return matchSearch && matchStatus;
+    return true;
   });
 
+  // Chart Data
+  const statusCounts = {
+    'Approved': adminDocs.filter(d => d.file_review_status === 'Reviewed – No Issues Found').length,
+    'Pending Review': adminDocs.filter(d => d.file_review_status === 'Pending Review' || d.file_review_status === 'Under Review').length,
+    'Correction Required': adminDocs.filter(d => d.file_review_status === 'Correction Required').length,
+    'Pending Assignment': adminDocs.filter(d => !d.assigned_volunteer).length
+  };
+
+  const chartData = {
+    labels: Object.keys(statusCounts),
+    datasets: [
+      {
+        data: Object.values(statusCounts),
+        backgroundColor: ['#10b981', '#f59e0b', '#f43f5e', '#64748b']
+      }
+    ]
+  };
+
   return (
-    <div className="space-y-6 pb-8">
+    <div className="space-y-6 pb-12 max-w-6xl mx-auto">
       {/* Header Banner */}
-      <div className="bg-slate-900 text-white p-6 rounded-xl shadow-md flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+      <div className="bg-slate-900 text-white rounded-2xl p-6 shadow-md flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
-          <span className="text-xs font-semibold uppercase tracking-wider text-purple-400">Application Administration</span>
+          <span className="text-xs uppercase font-bold text-purple-400 tracking-wider">Administrator Console</span>
           <h1 className="text-2xl font-bold flex items-center gap-2 mt-0.5">
-            <Shield className="w-6 h-6 text-purple-400" /> Executive Analytics & Management Portal
+            <Shield className="w-6 h-6 text-purple-400" /> Admin Dashboard
           </h1>
-          <p className="text-slate-400 text-xs mt-1">Supervise citizen requests, manage volunteers, and audit workflow integrity</p>
+          <p className="text-xs text-slate-400 mt-1">
+            Regional volunteer management, document review assignments, and system records.
+          </p>
         </div>
-
-        <div className="flex flex-wrap items-center gap-2">
-          <Link
-            to="/admin/validation-demo"
-            className="btn btn-primary bg-indigo-600 hover:bg-indigo-700 text-white border-none btn-sm font-bold shadow-md flex items-center gap-1.5"
-          >
-            <PlayCircle className="w-4 h-4 text-indigo-200" /> Validation & Security Demo
-          </Link>
-          <span className="text-xs bg-purple-900/60 border border-purple-500/30 text-purple-200 px-3 py-1.5 rounded-full font-mono">
-            Admin Access
-          </span>
-        </div>
+        <Link
+          to="/explorer"
+          className="btn btn-sm bg-purple-600 hover:bg-purple-700 text-white border-none font-semibold px-4 py-2 rounded-xl text-xs"
+        >
+          Database Explorer
+        </Link>
       </div>
 
-      {/* Analytics KPI Metric Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-6 gap-3">
-        <div className="card p-3 text-center">
-          <span className="text-xl font-black text-blue-600 block">{stats?.cards?.totalCitizens}</span>
-          <span className="text-[11px] text-slate-500 font-semibold">Citizens</span>
-        </div>
-        <div className="card p-3 text-center">
-          <span className="text-xl font-black text-slate-800 block">{stats?.cards?.totalRequests}</span>
-          <span className="text-[11px] text-slate-500 font-semibold">Total Requests</span>
-        </div>
-        <div className="card p-3 text-center">
-          <span className="text-xl font-black text-amber-600 block">{stats?.cards?.pendingRequests}</span>
-          <span className="text-[11px] text-slate-500 font-semibold">Pending Review</span>
-        </div>
-        <div className="card p-3 text-center">
-          <span className="text-xl font-black text-emerald-600 block">{stats?.cards?.resolvedRequests}</span>
-          <span className="text-[11px] text-slate-500 font-semibold">Resolved</span>
-        </div>
-        <div className="card p-3 text-center">
-          <span className="text-xl font-black text-purple-600 block">{stats?.cards?.totalAssistance}</span>
-          <span className="text-[11px] text-slate-500 font-semibold">Assistance Requests</span>
-        </div>
-        <div className="card p-3 text-center">
-          <span className="text-xl font-black text-indigo-600 block">{stats?.cards?.totalVolunteers}</span>
-          <span className="text-[11px] text-slate-500 font-mono font-semibold">Volunteers</span>
-        </div>
+      {/* 5 Main Navigation Tabs (Priority 5) */}
+      <div className="flex border-b border-slate-200 bg-white px-4 rounded-xl shadow-sm text-sm font-semibold overflow-x-auto">
+        <button
+          onClick={() => setActiveTab('overview')}
+          className={`py-3.5 px-4 border-b-2 flex items-center gap-2 whitespace-nowrap transition ${
+            activeTab === 'overview'
+              ? 'border-purple-600 text-purple-700'
+              : 'border-transparent text-slate-500 hover:text-slate-700'
+          }`}
+        >
+          <FileText className="w-4 h-4" /> Overview
+        </button>
+
+        <button
+          onClick={() => setActiveTab('assignments')}
+          className={`py-3.5 px-4 border-b-2 flex items-center gap-2 whitespace-nowrap transition ${
+            activeTab === 'assignments'
+              ? 'border-purple-600 text-purple-700'
+              : 'border-transparent text-slate-500 hover:text-slate-700'
+          }`}
+        >
+          <FileCheck2 className="w-4 h-4" /> Document Assignments ({adminDocs.length})
+        </button>
+
+        <button
+          onClick={() => setActiveTab('citizens')}
+          className={`py-3.5 px-4 border-b-2 flex items-center gap-2 whitespace-nowrap transition ${
+            activeTab === 'citizens'
+              ? 'border-purple-600 text-purple-700'
+              : 'border-transparent text-slate-500 hover:text-slate-700'
+          }`}
+        >
+          <Users className="w-4 h-4" /> Citizens ({citizens.length})
+        </button>
+
+        <button
+          onClick={() => setActiveTab('volunteers')}
+          className={`py-3.5 px-4 border-b-2 flex items-center gap-2 whitespace-nowrap transition ${
+            activeTab === 'volunteers'
+              ? 'border-purple-600 text-purple-700'
+              : 'border-transparent text-slate-500 hover:text-slate-700'
+          }`}
+        >
+          <UserCheck className="w-4 h-4" /> Volunteers ({volunteers.length})
+        </button>
+
+        <button
+          onClick={() => setActiveTab('reports')}
+          className={`py-3.5 px-4 border-b-2 flex items-center gap-2 whitespace-nowrap transition ${
+            activeTab === 'reports'
+              ? 'border-purple-600 text-purple-700'
+              : 'border-transparent text-slate-500 hover:text-slate-700'
+          }`}
+        >
+          <SlidersHorizontal className="w-4 h-4" /> Reports
+        </button>
       </div>
 
-      {/* Chart.js Analytics Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <div className="card">
-          <h3 className="text-xs font-bold text-slate-700 uppercase mb-3">Requests by Current Status</h3>
-          <div className="h-48 flex items-center justify-center">
-            <Doughnut data={statusChartData} options={{ maintainAspectRatio: false }} />
+      {/* TAB 1: OVERVIEW */}
+      {activeTab === 'overview' && (
+        <div className="space-y-6">
+          {/* KPI Metrics */}
+          <div className="grid grid-cols-2 md:grid-cols-6 gap-3">
+            <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm text-center">
+              <span className="text-xl font-black text-blue-600 block">{citizens.length}</span>
+              <span className="text-[11px] text-slate-500 font-semibold">Citizens</span>
+            </div>
+            <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm text-center">
+              <span className="text-xl font-black text-indigo-600 block">{volunteers.length}</span>
+              <span className="text-[11px] text-slate-500 font-semibold">Volunteers</span>
+            </div>
+            <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm text-center">
+              <span className="text-xl font-black text-slate-800 block">{adminDocs.length}</span>
+              <span className="text-[11px] text-slate-500 font-semibold">Total Documents</span>
+            </div>
+            <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm text-center">
+              <span className="text-xl font-black text-amber-600 block">
+                {adminDocs.filter(d => !d.assigned_volunteer).length}
+              </span>
+              <span className="text-[11px] text-slate-500 font-semibold">Pending Assign</span>
+            </div>
+            <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm text-center">
+              <span className="text-xl font-black text-rose-600 block">
+                {adminDocs.filter(d => d.file_review_status === 'Correction Required').length}
+              </span>
+              <span className="text-[11px] text-slate-500 font-semibold">Corrections</span>
+            </div>
+            <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm text-center">
+              <span className="text-xl font-black text-emerald-600 block">
+                {adminDocs.filter(d => d.file_review_status === 'Reviewed – No Issues Found').length}
+              </span>
+              <span className="text-[11px] text-slate-500 font-semibold">Approved</span>
+            </div>
           </div>
-        </div>
-        <div className="card">
-          <h3 className="text-xs font-bold text-slate-700 uppercase mb-3">Requests by District Area</h3>
-          <div className="h-48 flex items-center justify-center">
-            <Bar data={areaChartData} options={{ maintainAspectRatio: false }} />
-          </div>
-        </div>
-        <div className="card">
-          <h3 className="text-xs font-bold text-slate-700 uppercase mb-3">Assistance Request Categories</h3>
-          <div className="h-48 flex items-center justify-center">
-            <Pie data={categoryChartData} options={{ maintainAspectRatio: false }} />
-          </div>
-        </div>
-      </div>
 
-      {/* Management Tabs */}
-      <div className="card">
-        <div className="flex border-b border-slate-200 mb-4 overflow-x-auto text-xs font-bold">
-          <button
-            onClick={() => setActiveTab('requests')}
-            className={`py-2.5 px-4 border-b-2 flex items-center gap-2 ${
-              activeTab === 'requests' ? 'border-purple-600 text-purple-700' : 'border-transparent text-slate-500'
-            }`}
-          >
-            <FileText className="w-4 h-4" /> Verification Requests ({requests.length})
-          </button>
-          <button
-            onClick={() => setActiveTab('assistance')}
-            className={`py-2.5 px-4 border-b-2 flex items-center gap-2 ${
-              activeTab === 'assistance' ? 'border-purple-600 text-purple-700' : 'border-transparent text-slate-500'
-            }`}
-          >
-            <UserCheck className="w-4 h-4" /> Assistance & Volunteer Matching ({assistanceRequests.length})
-          </button>
-          <button
-            onClick={() => setActiveTab('volunteers')}
-            className={`py-2.5 px-4 border-b-2 flex items-center gap-2 ${
-              activeTab === 'volunteers' ? 'border-purple-600 text-purple-700' : 'border-transparent text-slate-500'
-            }`}
-          >
-            <Users className="w-4 h-4" /> Volunteers Roster ({volunteers.length})
-          </button>
-          <button
-            onClick={() => setActiveTab('citizens')}
-            className={`py-2.5 px-4 border-b-2 flex items-center gap-2 ${
-              activeTab === 'citizens' ? 'border-purple-600 text-purple-700' : 'border-transparent text-slate-500'
-            }`}
-          >
-            Citizens Directory ({citizens.length})
-          </button>
-          <button
-            onClick={() => setActiveTab('doc_assignments')}
-            className={`py-2.5 px-4 border-b-2 flex items-center gap-2 ${
-              activeTab === 'doc_assignments' ? 'border-purple-600 text-purple-700' : 'border-transparent text-slate-500'
-            }`}
-          >
-            <CheckCircle2 className="w-4 h-4" /> Document Review Assignments ({adminDocs.length})
-          </button>
-        </div>
-
-        {/* Tab 1: Verification Requests */}
-        {activeTab === 'requests' && (
-          <div className="space-y-4">
-            <div className="flex flex-col sm:flex-row justify-between gap-3">
-              <div className="flex gap-2">
-                <input
-                  type="text"
-                  placeholder="Search by Citizen, Type, or ID..."
-                  value={searchQuery}
-                  onChange={e => setSearchQuery(e.target.value)}
-                  className="px-3 py-1.5 border rounded text-xs w-64"
-                />
-                <select
-                  value={statusFilter}
-                  onChange={e => setStatusFilter(e.target.value)}
-                  className="px-3 py-1.5 border rounded text-xs"
-                >
-                  <option value="">All Statuses</option>
-                  <option value="SUBMITTED">SUBMITTED</option>
-                  <option value="DOCUMENTS_PENDING">DOCUMENTS_PENDING</option>
-                  <option value="DOCUMENTS_SUBMITTED">DOCUMENTS_SUBMITTED</option>
-                  <option value="UNDER_REVIEW">UNDER_REVIEW</option>
-                  <option value="RESOLVED">RESOLVED</option>
-                  <option value="CANCELLED">CANCELLED</option>
-                </select>
+          {/* Clean Overview Visuals */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
+              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-600 mb-4">
+                Document Review Status Breakdown
+              </h3>
+              <div className="h-56 flex items-center justify-center">
+                <Doughnut data={chartData} options={{ maintainAspectRatio: false }} />
               </div>
             </div>
 
-            <div className="table-container">
-              <table className="table">
+            <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
+              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-600 mb-3">
+                Quick Regional Summary
+              </h3>
+              <div className="space-y-2 text-xs">
+                {districtOptions.map(dist => {
+                  const count = adminDocs.filter(d => d.district === dist).length;
+                  return (
+                    <div key={dist} className="flex justify-between items-center p-2.5 bg-slate-50 rounded-lg border">
+                      <span className="font-semibold text-slate-800">{dist}</span>
+                      <span className="text-purple-700 font-bold">{count} Documents</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* TAB 2: DOCUMENT ASSIGNMENTS (Priority 5 & Priority 2) */}
+      {activeTab === 'assignments' && (
+        <div className="space-y-4">
+          {/* Regional Filters with Dependent Dropdowns */}
+          <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex flex-wrap gap-3 items-center text-xs">
+            <span className="font-bold text-slate-700 flex items-center gap-1">
+              <Filter className="w-3.5 h-3.5 text-purple-600" /> Filter By:
+            </span>
+
+            {/* District Dropdown */}
+            <select
+              value={filterDistrict}
+              onChange={e => {
+                setFilterDistrict(e.target.value);
+                setFilterConstituency('');
+                setFilterArea('');
+              }}
+              className="border rounded-lg p-2 bg-white"
+            >
+              <option value="">All Districts</option>
+              {districtOptions.map(d => (
+                <option key={d} value={d}>{d}</option>
+              ))}
+            </select>
+
+            {/* Dependent Constituency Dropdown */}
+            <select
+              value={filterConstituency}
+              onChange={e => setFilterConstituency(e.target.value)}
+              className="border rounded-lg p-2 bg-white"
+            >
+              <option value="">All Constituencies</option>
+              {constituencyOptions.map(c => (
+                <option key={c} value={c}>{c}</option>
+              ))}
+            </select>
+
+            {/* Dependent Area Dropdown */}
+            <select
+              value={filterArea}
+              onChange={e => setFilterArea(e.target.value)}
+              className="border rounded-lg p-2 bg-white"
+            >
+              <option value="">All Service Areas</option>
+              {areaOptions.map(a => (
+                <option key={a} value={a}>{a}</option>
+              ))}
+            </select>
+
+            {/* Assignment Status Filter */}
+            <select
+              value={filterStatus}
+              onChange={e => setFilterStatus(e.target.value)}
+              className="border rounded-lg p-2 bg-white"
+            >
+              <option value="">All Statuses</option>
+              <option value="Assigned">Assigned</option>
+              <option value="Pending Assignment">Pending Assignment</option>
+            </select>
+
+            {(filterDistrict || filterConstituency || filterArea || filterStatus) && (
+              <button
+                onClick={() => {
+                  setFilterDistrict('');
+                  setFilterConstituency('');
+                  setFilterArea('');
+                  setFilterStatus('');
+                }}
+                className="btn btn-outline btn-sm text-xs py-1.5 px-3 rounded-lg"
+              >
+                Reset Filters
+              </button>
+            )}
+          </div>
+
+          {/* Document Assignments Table */}
+          <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse text-xs">
                 <thead>
-                  <tr>
-                    <th>Req #</th>
-                    <th>Citizen</th>
-                    <th>Type</th>
-                    <th>Date</th>
-                    <th>Status</th>
-                    <th>Actions</th>
+                  <tr className="bg-slate-50 text-slate-600 uppercase text-[11px] font-bold border-b border-slate-200">
+                    <th className="py-3.5 px-4">Citizen</th>
+                    <th className="py-3.5 px-4">Region</th>
+                    <th className="py-3.5 px-4">Document</th>
+                    <th className="py-3.5 px-4">Volunteer</th>
+                    <th className="py-3.5 px-4">Status</th>
+                    <th className="py-3.5 px-4 text-right">Action</th>
                   </tr>
                 </thead>
-                <tbody>
-                  {filteredRequests.map(r => (
-                    <tr key={r.request_id}>
-                      <td className="font-mono text-xs font-bold text-blue-700">VR100{r.request_id}</td>
-                      <td className="font-semibold text-slate-800">{r.citizen_name}</td>
-                      <td className="text-xs">{r.request_type}</td>
-                      <td className="text-xs text-slate-500">{new Date(r.submission_date).toLocaleDateString()}</td>
-                      <td>
-                        <span className={`badge badge-${r.current_status.toLowerCase()}`}>{r.current_status}</span>
-                      </td>
-                      <td>
-                        <div className="flex items-center gap-2">
-                          <button
-                            onClick={() => handleOpenStatusModal(r)}
-                            className="btn btn-outline btn-sm text-[11px] py-1 text-purple-700 border-purple-200 hover:bg-purple-50"
-                          >
-                            <Edit3 className="w-3 h-3" /> Update Status (Form 9)
-                          </button>
-                          <Link to={`/requests/${r.request_id}`} className="text-xs text-blue-600 hover:underline">
-                            View Timeline →
-                          </Link>
-                        </div>
+                <tbody className="divide-y divide-slate-100">
+                  {loading ? (
+                    <tr>
+                      <td colSpan="6" className="text-center py-8 text-slate-400">
+                        <Loader2 className="w-5 h-5 animate-spin inline mr-2 text-purple-600" /> Loading assignments...
                       </td>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
-
-        {/* Tab 2: Assistance Matching */}
-        {activeTab === 'assistance' && (
-          <div className="table-container">
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>Req #</th>
-                  <th>Citizen</th>
-                  <th>Request Type</th>
-                  <th>Priority</th>
-                  <th>Assigned Volunteer</th>
-                  <th>Status</th>
-                  <th>Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {assistanceRequests.map(a => (
-                  <tr key={a.assistance_id}>
-                    <td className="font-mono text-xs font-bold">AR100{a.assistance_id}</td>
-                    <td className="font-semibold">{a.citizen_name}</td>
-                    <td>{a.request_type}</td>
-                    <td><span className="badge bg-amber-100 text-amber-800">{a.priority}</span></td>
-                    <td className="font-semibold text-indigo-700">{a.volunteer_name || 'Unassigned'}</td>
-                    <td><span className="badge badge-pending">{a.status}</span></td>
-                    <td>
-                      <button
-                        onClick={() => { setSelectedAssistId(a.assistance_id); setAssignModalError(''); }}
-                        className="btn btn-primary btn-sm text-[11px] py-1"
-                      >
-                        Assign Volunteer
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-
-        {/* Tab 3: Volunteers Roster */}
-        {activeTab === 'volunteers' && (
-          <div className="table-container">
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>ID</th>
-                  <th>Name</th>
-                  <th>Email</th>
-                  <th>Area Zone</th>
-                  <th>Availability</th>
-                  <th>Skills</th>
-                </tr>
-              </thead>
-              <tbody>
-                {volunteers.map(v => (
-                  <tr key={v.volunteer_id}>
-                    <td className="font-mono text-xs font-bold">VOL#{v.volunteer_id}</td>
-                    <td className="font-semibold">{v.name}</td>
-                    <td className="text-xs font-mono">{v.email}</td>
-                    <td className="text-xs">{v.area_name || 'Bengaluru South'}</td>
-                    <td>
-                      <span className={`badge ${v.availability === 'Available' ? 'badge-resolved' : 'badge-pending'}`}>
-                        {v.availability}
-                      </span>
-                    </td>
-                    <td className="text-xs text-slate-600">{v.skills}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-
-        {/* Tab 4: Citizens Directory */}
-        {activeTab === 'citizens' && (
-          <div className="table-container">
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>ID</th>
-                  <th>Name</th>
-                  <th>Email</th>
-                  <th>Mobile</th>
-                  <th>District</th>
-                  <th>Registered At</th>
-                </tr>
-              </thead>
-              <tbody>
-                {citizens.map(c => (
-                  <tr key={c.citizen_id}>
-                    <td className="font-mono text-xs font-bold">CIT#{c.citizen_id}</td>
-                    <td className="font-semibold text-slate-800">{c.name}</td>
-                    <td className="text-xs">{c.email}</td>
-                    <td className="text-xs font-mono">{c.mobile}</td>
-                    <td className="text-xs">{c.district || 'Bengaluru'}</td>
-                    <td className="text-xs text-slate-400">{new Date(c.created_at).toLocaleDateString()}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-
-        {/* Tab 5: Document Review Assignments */}
-        {activeTab === 'doc_assignments' && (
-          <div className="space-y-4">
-            <div className="flex justify-between items-center">
-              <div>
-                <h3 className="font-bold text-slate-800 text-sm">Citizen Document Verification Assignments</h3>
-                <p className="text-xs text-slate-500">Assign uploaded supporting document files to approved community volunteers for manual review.</p>
-              </div>
-              <button onClick={fetchAdminData} className="btn btn-outline btn-sm text-xs py-1">
-                Refresh Document List
-              </button>
-            </div>
-
-            <div className="table-container">
-              <table className="table">
-                <thead>
-                  <tr>
-                    <th>Doc #</th>
-                    <th>Citizen Name</th>
-                    <th>Document Type</th>
-                    <th>Version</th>
-                    <th>Review Status</th>
-                    <th>Assigned Volunteer</th>
-                    <th>Assignment Status</th>
-                    <th className="text-right">Action</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {adminDocs.length === 0 ? (
+                  ) : filteredDocs.length === 0 ? (
                     <tr>
-                      <td colSpan="8" className="text-center py-6 text-slate-400 text-xs">No document files uploaded by citizens yet.</td>
+                      <td colSpan="6" className="text-center py-8 text-slate-400">
+                        No documents match selected regional filters.
+                      </td>
                     </tr>
                   ) : (
-                    adminDocs.map(d => (
-                      <tr key={d.document_id}>
-                        <td className="font-mono text-xs font-bold text-blue-700">DOC#{d.document_id}</td>
-                        <td>
-                          <div className="font-semibold text-slate-800 text-xs">{d.citizen_name}</div>
-                          <div className="text-[10px] text-slate-400">{d.citizen_email}</div>
+                    filteredDocs.map(doc => (
+                      <tr key={doc.document_id} className="hover:bg-slate-50/70 transition">
+                        <td className="py-3.5 px-4 font-semibold text-slate-800">
+                          {doc.citizen_name}
+                          <span className="text-[10px] text-slate-400 block font-mono">ID: #{doc.citizen_id}</span>
                         </td>
-                        <td className="text-xs font-semibold">{d.document_type}</td>
-                        <td className="font-mono text-xs">v{d.current_version}</td>
-                        <td>
-                          <span className="badge badge-info text-[10px]">{d.file_review_status}</span>
-                        </td>
-                        <td className="text-xs">
-                          {d.assigned_volunteer ? (
-                            <span className="font-semibold text-purple-700">{d.assigned_volunteer}</span>
-                          ) : (
-                            <span className="text-amber-600 font-semibold italic">Unassigned</span>
+                        <td className="py-3.5 px-4">
+                          <span className="font-semibold text-slate-700 block">{doc.region}</span>
+                          {doc.constituency_name && (
+                            <span className="text-[10px] text-slate-400 block">{doc.constituency_name}</span>
                           )}
                         </td>
-                        <td>
-                          <span className={`badge ${d.assignment_status === 'Active' ? 'badge-resolved' : 'badge-warning'} text-[10px]`}>
-                            {d.assignment_status || 'Unassigned'}
+                        <td className="py-3.5 px-4 font-medium text-slate-900">
+                          {doc.document_type}
+                          <span className="text-[10px] text-slate-400 block font-mono">DOC#{doc.document_id}</span>
+                        </td>
+                        <td className="py-3.5 px-4">
+                          {doc.assigned_volunteer ? (
+                            <div>
+                              <span className="font-semibold text-indigo-700 block">{doc.assigned_volunteer}</span>
+                              <span className="text-[10px] text-slate-400 font-mono">VOL#{doc.volunteer_id}</span>
+                            </div>
+                          ) : (
+                            <span className="text-amber-700 bg-amber-50 px-2 py-0.5 rounded text-[10px] font-semibold border border-amber-200">
+                              Not Assigned Yet
+                            </span>
+                          )}
+                        </td>
+                        <td className="py-3.5 px-4">
+                          <span className="font-semibold text-slate-700">
+                            {doc.file_review_status || 'Pending Review'}
                           </span>
                         </td>
-                        <td className="text-right">
+                        <td className="py-3.5 px-4 text-right">
                           <button
-                            onClick={() => {
-                              setSelectedDocForAssign(d);
-                              setSelectedDocVolId(d.volunteer_id ? String(d.volunteer_id) : '');
-                              setDocAssignError('');
-                            }}
-                            className="btn btn-primary btn-sm text-xs py-1 px-3 bg-purple-600 hover:bg-purple-700 border-none"
+                            onClick={() => openAssignModal(doc)}
+                            className="btn btn-sm btn-primary bg-purple-600 hover:bg-purple-700 text-white font-semibold px-3 py-1.5 rounded-lg text-xs"
                           >
-                            {d.assigned_volunteer ? 'Reassign' : 'Assign Volunteer'}
+                            {doc.assigned_volunteer ? 'Reassign' : 'Assign Volunteer'}
                           </button>
                         </td>
                       </tr>
@@ -587,238 +494,211 @@ export default function AdminDashboard() {
               </table>
             </div>
           </div>
-        )}
-      </div>
+        </div>
+      )}
 
-      {/* FORM 9 MODAL: Admin Request Status Update */}
-      {selectedReq && (
-        <div className="modal-overlay">
-          <div className="modal-content">
-            <div className="flex justify-between items-center mb-4 pb-3 border-b border-slate-100">
-              <div>
-                <h3 className="text-base font-bold text-slate-800 flex items-center gap-2">
-                  <Edit3 className="w-4 h-4 text-purple-600" /> Admin Request Status Transition (Form 9)
-                </h3>
-                <p className="text-[11px] text-slate-500">Atomic status transition with automated history & notification</p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setSelectedReq(null)}
-                className="text-slate-400 hover:text-slate-600 text-sm font-bold"
-              >
-                ✕
-              </button>
-            </div>
-
-            {statusModalError && (
-              <div className="bg-red-50 text-red-700 text-xs p-3 rounded-lg mb-4 border border-red-200 flex items-center gap-2">
-                <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />
-                <span>{statusModalError}</span>
-              </div>
-            )}
-
-            <div className="bg-slate-50 p-3 rounded-lg border border-slate-200 mb-4 grid grid-cols-2 gap-2 text-xs font-mono">
-              <div>
-                <span className="text-slate-400 block text-[10px]">Request Identifier</span>
-                <span className="font-bold text-blue-700">VR100{selectedReq.request_id}</span>
-              </div>
-              <div>
-                <span className="text-slate-400 block text-[10px]">Current Status</span>
-                <span className="font-bold text-purple-700">{selectedReq.current_status}</span>
-              </div>
-            </div>
-
-            <form onSubmit={handleUpdateStatus} noValidate className="space-y-4 text-xs">
-              <div className="form-group mb-0">
-                <label className="form-label">
-                  New Status Transition <span className="req">*</span>
-                </label>
-                <select
-                  value={newStatus}
-                  onChange={e => setNewStatus(e.target.value)}
-                  className="form-select font-semibold"
-                >
-                  {(ALLOWED_TRANSITIONS[selectedReq.current_status] || []).length === 0 ? (
-                    <option value={selectedReq.current_status}>No further transitions permitted (Terminal State)</option>
-                  ) : (
-                    (ALLOWED_TRANSITIONS[selectedReq.current_status] || []).map(st => (
-                      <option key={st} value={st}>{st}</option>
-                    ))
-                  )}
-                </select>
-                <p className="form-hint">Enforces valid state machine transitions to maintain relational consistency.</p>
-              </div>
-
-              <div className="form-group mb-0">
-                <div className="flex justify-between items-center mb-1">
-                  <label className="form-label mb-0">Admin Audit Remarks</label>
-                  <span className="text-[10px] text-slate-400">{statusRemarks.length} / 500 chars</span>
-                </div>
-                <textarea
-                  rows="3"
-                  maxLength="500"
-                  value={statusRemarks}
-                  onChange={e => setStatusRemarks(e.target.value)}
-                  placeholder="Record verification notes, resolution remarks, or query clarification..."
-                  className="form-textarea text-xs"
-                />
-              </div>
-
-              <div className="bg-purple-50 p-2.5 rounded border border-purple-200 text-[10px] text-purple-800">
-                ⚡ <strong>DBMS Transaction:</strong> Updating status executes an atomic transaction. In MySQL, the database trigger <code>trg_after_verification_request_update_status</code> automatically captures this change in <code>Status_History</code> and creates a citizen <code>Notification</code> without duplicate logging.
-              </div>
-
-              <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
-                <button
-                  type="button"
-                  onClick={() => setSelectedReq(null)}
-                  className="btn btn-outline btn-sm"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={updatingStatus || (ALLOWED_TRANSITIONS[selectedReq.current_status] || []).length === 0}
-                  className="btn btn-primary btn-sm px-4 bg-purple-600 hover:bg-purple-700 border-none"
-                >
-                  {updatingStatus ? (
-                    <>
-                      <Loader2 className="w-3.5 h-3.5 animate-spin" /> Updating Status...
-                    </>
-                  ) : (
-                    'Execute Status Transition'
-                  )}
-                </button>
-              </div>
-            </form>
+      {/* TAB 3: CITIZENS DIRECTORY */}
+      {activeTab === 'citizens' && (
+        <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
+          <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
+            <h2 className="font-bold text-slate-800 text-sm">Citizens Directory ({citizens.length})</h2>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse text-xs">
+              <thead>
+                <tr className="bg-slate-50 text-slate-600 uppercase text-[11px] font-bold border-b border-slate-200">
+                  <th className="py-3.5 px-4">Name</th>
+                  <th className="py-3.5 px-4">Email</th>
+                  <th className="py-3.5 px-4">Mobile</th>
+                  <th className="py-3.5 px-4">Location / Address</th>
+                  <th className="py-3.5 px-4">Taluk / District</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {citizens.map(c => (
+                  <tr key={c.citizen_id} className="hover:bg-slate-50/70 transition">
+                    <td className="py-3.5 px-4 font-semibold text-slate-800">{c.name}</td>
+                    <td className="py-3.5 px-4 text-slate-600">{c.email}</td>
+                    <td className="py-3.5 px-4 font-mono text-slate-600">{c.mobile}</td>
+                    <td className="py-3.5 px-4 text-slate-600">
+                      {[c.house_number, c.street].filter(Boolean).join(', ') || '—'}
+                    </td>
+                    <td className="py-3.5 px-4 text-slate-600">
+                      {[c.taluk, c.district].filter(Boolean).join(', ') || 'Bengaluru'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         </div>
       )}
 
-      {/* Assign Volunteer Modal */}
-      {selectedAssistId && (
-        <div className="modal-overlay">
-          <div className="modal-content">
-            <div className="flex justify-between items-center mb-4 pb-3 border-b border-slate-100">
-              <h3 className="text-base font-bold text-slate-800">Assign Volunteer to Assistance #AR100{selectedAssistId}</h3>
-              <button
-                type="button"
-                onClick={() => setSelectedAssistId(null)}
-                className="text-slate-400 hover:text-slate-600 text-sm font-bold"
-              >
-                ✕
-              </button>
-            </div>
-
-            {assignModalError && (
-              <div className="bg-red-50 text-red-700 text-xs p-3 rounded-lg mb-4 border border-red-200">
-                {assignModalError}
-              </div>
-            )}
-
-            <form onSubmit={handleAssignVolunteer} noValidate className="space-y-4 text-xs">
-              <div className="form-group mb-0">
-                <label className="form-label">Select Available Volunteer <span className="req">*</span></label>
-                <select
-                  value={selectedVolId}
-                  onChange={e => setSelectedVolId(e.target.value)}
-                  required
-                  className="form-select"
-                >
-                  <option value="">Choose Volunteer...</option>
-                  {volunteers.map(v => (
-                    <option key={v.volunteer_id} value={v.volunteer_id}>
-                      {v.name} ({v.area_name || 'General Zone'} - {v.skills}) [{v.availability}]
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
-                <button type="button" onClick={() => setSelectedAssistId(null)} className="btn btn-outline btn-sm">
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={assigningVol}
-                  className="btn btn-primary btn-sm"
-                >
-                  {assigningVol ? 'Assigning...' : 'Assign & Notify Citizen'}
-                </button>
-              </div>
-            </form>
+      {/* TAB 4: VOLUNTEERS ROSTER */}
+      {activeTab === 'volunteers' && (
+        <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
+          <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
+            <h2 className="font-bold text-slate-800 text-sm">Volunteer Roster & Regions ({volunteers.length})</h2>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse text-xs">
+              <thead>
+                <tr className="bg-slate-50 text-slate-600 uppercase text-[11px] font-bold border-b border-slate-200">
+                  <th className="py-3.5 px-4">Volunteer</th>
+                  <th className="py-3.5 px-4">Email / Mobile</th>
+                  <th className="py-3.5 px-4">Service Area</th>
+                  <th className="py-3.5 px-4">Availability</th>
+                  <th className="py-3.5 px-4">Verification</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {volunteers.map(v => (
+                  <tr key={v.volunteer_id} className="hover:bg-slate-50/70 transition">
+                    <td className="py-3.5 px-4 font-semibold text-slate-800">
+                      {v.name}
+                      <span className="text-[10px] text-slate-400 block font-mono">VOL#{v.volunteer_id}</span>
+                    </td>
+                    <td className="py-3.5 px-4 text-slate-600">
+                      {v.email}
+                      <span className="text-[10px] text-slate-400 block font-mono">{v.mobile}</span>
+                    </td>
+                    <td className="py-3.5 px-4 font-medium text-indigo-700">
+                      {v.area_name || 'Area #' + (v.area_id || 'N/A')}
+                    </td>
+                    <td className="py-3.5 px-4">
+                      <span className={`px-2 py-0.5 rounded text-[10px] font-semibold ${
+                        v.availability === 'Available' ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-600'
+                      }`}>
+                        {v.availability}
+                      </span>
+                    </td>
+                    <td className="py-3.5 px-4">
+                      <span className="text-emerald-700 font-semibold">{v.verification_status}</span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         </div>
       )}
 
-      {/* MODAL: Assign Volunteer to Document Review */}
+      {/* TAB 5: REPORTS */}
+      {activeTab === 'reports' && (
+        <div className="space-y-4">
+          <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm">
+            <h2 className="font-bold text-slate-800 text-base mb-2">Electoral Revision Verification Reports</h2>
+            <p className="text-xs text-slate-500 mb-6">Summary of requests and document reviews across constituencies.</p>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
+              <div className="p-4 bg-slate-50 rounded-xl border">
+                <span className="text-slate-500 block uppercase font-bold text-[10px]">Total Verification Requests</span>
+                <span className="text-2xl font-black text-slate-800">{requests.length}</span>
+              </div>
+              <div className="p-4 bg-slate-50 rounded-xl border">
+                <span className="text-slate-500 block uppercase font-bold text-[10px]">Active Volunteer Network</span>
+                <span className="text-2xl font-black text-indigo-700">
+                  {volunteers.filter(v => v.availability === 'Available').length} Available
+                </span>
+              </div>
+              <div className="p-4 bg-slate-50 rounded-xl border">
+                <span className="text-slate-500 block uppercase font-bold text-[10px]">Documents Resolved</span>
+                <span className="text-2xl font-black text-emerald-600">
+                  {adminDocs.filter(d => d.file_review_status === 'Reviewed – No Issues Found').length}
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* REGION-AWARE VOLUNTEER ASSIGNMENT MODAL (Priority 2 & Priority 5) */}
       {selectedDocForAssign && (
         <div className="modal-overlay">
-          <div className="modal-content max-w-md">
-            <div className="flex justify-between items-center mb-3 pb-2 border-b border-slate-100">
-              <h3 className="font-bold text-slate-800 text-base">Assign Volunteer for Document Review</h3>
-              <button onClick={() => setSelectedDocForAssign(null)} className="text-slate-400 hover:text-slate-600">✕</button>
+          <div className="modal-content max-w-lg p-6 rounded-2xl bg-white shadow-2xl">
+            <div className="flex justify-between items-center pb-3 border-b border-slate-100 mb-4">
+              <div>
+                <h3 className="font-bold text-slate-900 text-base flex items-center gap-2">
+                  <UserCheck className="w-5 h-5 text-purple-600" /> Assign Volunteer to Document
+                </h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Citizen: <strong>{selectedDocForAssign.citizen_name}</strong> • Region: <strong>{selectedDocForAssign.region}</strong>
+                </p>
+              </div>
+              <button
+                onClick={() => setSelectedDocForAssign(null)}
+                className="text-slate-400 hover:text-slate-600 p-1 font-bold"
+              >
+                <X className="w-5 h-5" />
+              </button>
             </div>
 
-            {docAssignError && (
-              <div className="bg-rose-50 text-rose-700 p-2.5 rounded text-xs mb-3 border border-rose-200">
-                {docAssignError}
+            {assignSuccess && (
+              <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs p-3 rounded-xl mb-4 flex items-center gap-2">
+                <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                <span>{assignSuccess}</span>
               </div>
             )}
 
-            <div className="bg-slate-50 p-2.5 rounded text-xs space-y-1 mb-3 border border-slate-200">
-              <div><strong>Document:</strong> DOC#{selectedDocForAssign.document_id} — {selectedDocForAssign.document_type}</div>
-              <div><strong>Citizen:</strong> {selectedDocForAssign.citizen_name}</div>
-              <div><strong>Current Review Status:</strong> {selectedDocForAssign.file_review_status}</div>
-            </div>
-
-            <form
-              onSubmit={async (e) => {
-                e.preventDefault();
-                if (!selectedDocVolId) {
-                  setDocAssignError('Please select a volunteer.');
-                  return;
-                }
-                setAssigningDocVol(true);
-                try {
-                  await API.post('/admin/volunteer-assignments', {
-                    document_id: selectedDocForAssign.document_id,
-                    volunteer_id: parseInt(selectedDocVolId)
-                  });
-                  setSelectedDocForAssign(null);
-                  fetchAdminData();
-                } catch (err) {
-                  setDocAssignError(err.response?.data?.error || 'Failed to assign volunteer.');
-                } finally {
-                  setAssigningDocVol(false);
-                }
-              }}
-              className="space-y-3 text-xs"
-            >
-              <div>
-                <label className="form-label font-semibold">Select Approved Volunteer <span className="req">*</span></label>
-                <select
-                  value={selectedDocVolId}
-                  onChange={e => setSelectedDocVolId(e.target.value)}
-                  className="form-select"
-                  required
-                >
-                  <option value="">Choose Volunteer...</option>
-                  {volunteers.filter(v => v.verification_status === 'Approved').map(v => (
-                    <option key={v.volunteer_id} value={v.volunteer_id}>
-                      {v.name} ({v.area_name || 'General Zone'}) [{v.availability}]
-                    </option>
-                  ))}
-                </select>
+            {assignError && (
+              <div className="bg-rose-50 border border-rose-200 text-rose-700 text-xs p-3 rounded-xl mb-4 flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 text-rose-600" />
+                <span>{assignError}</span>
               </div>
+            )}
 
-              <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
-                <button type="button" onClick={() => setSelectedDocForAssign(null)} className="btn btn-outline btn-sm">Cancel</button>
-                <button type="submit" disabled={assigningDocVol} className="btn btn-primary btn-sm bg-purple-600 hover:bg-purple-700 border-none">
-                  {assigningDocVol ? 'Assigning...' : 'Confirm Assignment'}
-                </button>
+            {loadingEligible ? (
+              <div className="text-center py-8 text-slate-400 text-xs">
+                <Loader2 className="w-5 h-5 animate-spin inline mr-2 text-purple-600" /> Calculating regional volunteer matches...
               </div>
-            </form>
+            ) : (
+              <form onSubmit={handleAssignSubmit} className="space-y-4 text-xs">
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">
+                    Select Volunteer <span className="text-rose-500">*</span>
+                  </label>
+                  <select
+                    value={selectedVolunteerId}
+                    onChange={e => setSelectedVolunteerId(e.target.value)}
+                    className="w-full border border-slate-300 rounded-lg p-2.5 text-xs bg-white font-medium focus:ring-2 focus:ring-purple-500"
+                    required
+                  >
+                    <option value="">-- Choose an active volunteer --</option>
+                    {eligibleVolunteersData?.volunteers?.map(v => (
+                      <option key={v.volunteer_id} value={v.volunteer_id}>
+                        {v.name} ({v.recommendation}) — Active assignments: {v.active_assignments_count}
+                      </option>
+                    ))}
+                  </select>
+                  <span className="text-[10px] text-slate-500 block mt-1">
+                    Volunteers from the citizen's service locality and district are prioritized above.
+                  </span>
+                </div>
+
+                <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
+                  <button
+                    type="button"
+                    onClick={() => setSelectedDocForAssign(null)}
+                    className="btn btn-outline btn-sm text-xs px-4 py-2 border-slate-300 rounded-lg"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={assigningVolunteer}
+                    className="btn btn-primary btn-sm bg-purple-600 hover:bg-purple-700 text-white font-semibold px-4 py-2 rounded-lg flex items-center gap-1.5"
+                  >
+                    {assigningVolunteer ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" /> Assigning...
+                      </>
+                    ) : (
+                      'Save Assignment'
+                    )}
+                  </button>
+                </div>
+              </form>
+            )}
           </div>
         </div>
       )}

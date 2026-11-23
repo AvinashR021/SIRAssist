@@ -1,425 +1,392 @@
 import React, { useState, useEffect, useContext } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { AuthContext } from '../context/AuthContext';
 import API from '../services/api';
-import ReadinessBadge from '../components/ReadinessBadge';
 import {
   FileText,
-  PlusCircle,
-  HelpCircle,
-  FileCheck,
+  Upload,
   CheckCircle2,
   Clock,
   AlertCircle,
   Eye,
-  XCircle,
+  RefreshCw,
   Loader2,
-  Info,
-  ShieldAlert
+  X,
+  FileCheck2,
+  ShieldCheck,
+  User,
+  ZoomIn,
+  ZoomOut,
+  Maximize2
 } from 'lucide-react';
 
 export default function CitizenDashboard() {
   const { user } = useContext(AuthContext);
-  const [requests, setRequests] = useState([]);
+  const navigate = useNavigate();
+
   const [documents, setDocuments] = useState([]);
-  const [uploadedDocs, setUploadedDocs] = useState([]);
-  const [assistanceRequests, setAssistanceRequests] = useState([]);
-  const [readiness, setReadiness] = useState(null);
   const [loading, setLoading] = useState(true);
 
-  // Modal States
-  const [showCreateReqModal, setShowCreateReqModal] = useState(false);
-  const [showAssistanceModal, setShowAssistanceModal] = useState(false);
-  const [submitSuccess, setSubmitSuccess] = useState(null);
+  // Quick Upload Modal
+  const [showUploadModal, setShowUploadModal] = useState(false);
+  const [docType, setDocType] = useState('Address Proof');
+  const [selectedFile, setSelectedFile] = useState(null);
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState('');
+  const [uploadSuccess, setUploadSuccess] = useState(null);
 
-  // Form 5: Verification Request States
-  const [reqType, setReqType] = useState('Record Verification');
-  const [voterRef, setVoterRef] = useState('');
-  const [reqRemarks, setReqRemarks] = useState('');
-  const [selectedDocIds, setSelectedDocIds] = useState([]);
-  const [reqFormErrors, setReqFormErrors] = useState({});
-  const [submittingReq, setSubmittingReq] = useState(false);
+  // Document Preview / Details Modal
+  const [selectedDoc, setSelectedDoc] = useState(null);
+  const [docDetail, setDocDetail] = useState(null);
+  const [previewVersion, setPreviewVersion] = useState(null);
+  const [zoomLevel, setZoomLevel] = useState(1);
+  const [loadingDetail, setLoadingDetail] = useState(false);
 
-  // Form 7: Assistance Request States
-  const [assistType, setAssistType] = useState('Digital Assistance');
-  const [assistPriority, setAssistPriority] = useState('Medium');
-  const [assistArea, setAssistArea] = useState('Bengaluru South Zone');
-  const [assistNotes, setAssistNotes] = useState('');
-  const [assistFormErrors, setAssistFormErrors] = useState({});
-  const [submittingAssist, setSubmittingAssist] = useState(false);
+  // Resubmit state inside detail view
+  const [resubmitFile, setResubmitFile] = useState(null);
+  const [resubmitting, setResubmitting] = useState(false);
+  const [resubmitError, setResubmitError] = useState('');
 
   useEffect(() => {
-    fetchDashboardData();
+    fetchDocuments();
   }, []);
 
-  const fetchDashboardData = async () => {
+  const fetchDocuments = async () => {
     try {
       setLoading(true);
-      const [reqRes, docRes, assistRes, uploadRes] = await Promise.all([
-        API.get('/requests'),
-        API.get('/documents'),
-        API.get('/assistance'),
-        API.get('/documents/my').catch(() => ({ data: [] }))
-      ]);
+      const res = await API.get('/documents/my');
+      setDocuments(res.data || []);
+      setLoading(false);
+    } catch (err) {
+      console.error('Failed to load documents:', err);
+      setLoading(false);
+    }
+  };
 
-      setRequests(reqRes.data);
-      setDocuments(docRes.data);
-      setAssistanceRequests(assistRes.data);
-      setUploadedDocs(uploadRes.data || []);
+  const handleFileChange = (e) => {
+    const file = e.target.files?.[0];
+    setUploadError('');
+    if (!file) {
+      setSelectedFile(null);
+      return;
+    }
+    const allowed = ['application/pdf', 'image/jpeg', 'image/jpg', 'image/png'];
+    if (!allowed.includes(file.type)) {
+      setUploadError('Please select a valid PDF, JPG, or PNG file.');
+      setSelectedFile(null);
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      setUploadError('File size must be under 5 MB.');
+      setSelectedFile(null);
+      return;
+    }
+    setSelectedFile(file);
+  };
 
-      // Fetch readiness for latest request if available
-      if (reqRes.data.length > 0) {
-        const latestId = reqRes.data[0].request_id;
-        const readRes = await API.get(`/requests/${latestId}/readiness`);
-        setReadiness(readRes.data);
+  const handleUploadSubmit = async (e) => {
+    e.preventDefault();
+    if (!selectedFile) {
+      setUploadError('Please select a document file to upload.');
+      return;
+    }
+
+    setUploading(true);
+    setUploadError('');
+    try {
+      const formData = new FormData();
+      formData.append('document_file', selectedFile);
+      formData.append('document_type', docType);
+
+      const res = await API.post('/documents/upload', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' }
+      });
+
+      setShowUploadModal(false);
+      setSelectedFile(null);
+      setUploadSuccess(res.data?.message || 'Document uploaded successfully!');
+      await fetchDocuments();
+      setUploading(false);
+
+      // Auto-dismiss success alert after 5 seconds
+      setTimeout(() => setUploadSuccess(null), 5000);
+    } catch (err) {
+      setUploadError(err.response?.data?.error || 'Failed to upload document. Please try again.');
+      setUploading(false);
+    }
+  };
+
+  const openDocumentModal = async (doc) => {
+    setSelectedDoc(doc);
+    setLoadingDetail(true);
+    setResubmitFile(null);
+    setResubmitError('');
+    setZoomLevel(1);
+    try {
+      const res = await API.get(`/documents/${doc.document_id}`);
+      setDocDetail(res.data);
+      if (res.data.versions && res.data.versions.length > 0) {
+        setPreviewVersion(res.data.versions[0]);
       }
-      setLoading(false);
     } catch (err) {
-      console.error(err);
-      setLoading(false);
-    }
-  };
-
-  // Toggle Document Selection in Form 5
-  const toggleDocSelection = (docId) => {
-    if (selectedDocIds.includes(docId)) {
-      setSelectedDocIds(selectedDocIds.filter(id => id !== docId));
-    } else {
-      setSelectedDocIds([...selectedDocIds, docId]);
-    }
-  };
-
-  // Validate Verification Request
-  const validateReqForm = () => {
-    const errors = {};
-    if (!reqType) errors.reqType = 'Please select a request type.';
-    if (reqRemarks && reqRemarks.length > 500) {
-      errors.reqRemarks = 'Remarks cannot exceed 500 characters.';
-    }
-    setReqFormErrors(errors);
-    return Object.keys(errors).length === 0;
-  };
-
-  // Submit Verification Request (Form 5)
-  const handleCreateRequest = async (e) => {
-    e.preventDefault();
-    if (!validateReqForm()) return;
-
-    setSubmittingReq(true);
-    setSubmitSuccess(null);
-    try {
-      const res = await API.post('/requests', {
-        request_type: reqType,
-        remarks: reqRemarks.trim(),
-        selected_document_ids: selectedDocIds
-      });
-
-      setShowCreateReqModal(false);
-      setReqRemarks('');
-      setVoterRef('');
-      setSelectedDocIds([]);
-      setSubmitSuccess({
-        title: 'Verification Request Created!',
-        message: `Your request #${res.data.request_id} (${reqType}) was successfully created with status SUBMITTED.`,
-        requestId: res.data.request_id
-      });
-      fetchDashboardData();
-    } catch (err) {
-      setReqFormErrors({ general: err.response?.data?.error || 'Failed to create request.' });
+      console.error('Failed to load document preview:', err);
     } finally {
-      setSubmittingReq(false);
+      setLoadingDetail(false);
     }
   };
 
-  // Validate Assistance Request (Form 7)
-  const validateAssistForm = () => {
-    const errors = {};
-    if (!assistType) errors.assistType = 'Please select an assistance type.';
-    if (!assistNotes.trim()) {
-      errors.assistNotes = 'Please describe your assistance requirement.';
-    } else if (assistNotes.trim().length < 5) {
-      errors.assistNotes = 'Description must be at least 5 characters.';
-    } else if (assistNotes.trim().length > 500) {
-      errors.assistNotes = 'Description cannot exceed 500 characters.';
-    }
-    setAssistFormErrors(errors);
-    return Object.keys(errors).length === 0;
-  };
-
-  // Submit Assistance Request (Form 7)
-  const handleCreateAssistance = async (e) => {
+  const handleResubmit = async (e) => {
     e.preventDefault();
-    if (!validateAssistForm()) return;
-
-    setSubmittingAssist(true);
+    if (!resubmitFile) {
+      setResubmitError('Please choose a corrected document file.');
+      return;
+    }
+    setResubmitting(true);
+    setResubmitError('');
     try {
-      await API.post('/assistance', {
-        request_type: assistType,
-        priority: assistPriority,
-        notes: assistNotes.trim()
+      const formData = new FormData();
+      formData.append('document_file', resubmitFile);
+
+      await API.post(`/documents/${selectedDoc.document_id}/resubmit`, formData, {
+        headers: { 'Content-Type': 'multipart/form-data' }
       });
-      setShowAssistanceModal(false);
-      setAssistNotes('');
-      setSubmitSuccess({
-        title: 'Volunteer Assistance Requested!',
-        message: `Your community assistance request for '${assistType}' has been logged. An approved volunteer will be matched shortly.`,
-        requestId: null
-      });
-      fetchDashboardData();
+
+      setResubmitFile(null);
+      setResubmitting(false);
+      await fetchDocuments();
+      // Refresh current open detail
+      const res = await API.get(`/documents/${selectedDoc.document_id}`);
+      setDocDetail(res.data);
+      if (res.data.versions && res.data.versions.length > 0) {
+        setPreviewVersion(res.data.versions[0]);
+      }
     } catch (err) {
-      setAssistFormErrors({ general: err.response?.data?.error || 'Failed to submit assistance request.' });
-    } finally {
-      setSubmittingAssist(false);
+      setResubmitError(err.response?.data?.error || 'Failed to resubmit corrected document.');
+      setResubmitting(false);
     }
   };
 
-  const pendingCount = requests.filter(r =>
-    ['SUBMITTED', 'DOCUMENTS_PENDING', 'DOCUMENTS_SUBMITTED', 'UNDER_REVIEW'].includes(r.current_status)
+  // Helper for Status Badge styling
+  const renderStatusBadge = (status) => {
+    switch (status) {
+      case 'Reviewed – No Issues Found':
+        return (
+          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-800">
+            <CheckCircle2 className="w-3.5 h-3.5" /> Approved
+          </span>
+        );
+      case 'Correction Required':
+        return (
+          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-rose-100 text-rose-800">
+            <AlertCircle className="w-3.5 h-3.5" /> Correction Needed
+          </span>
+        );
+      case 'Additional Document Requested':
+        return (
+          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-purple-100 text-purple-800">
+            <AlertCircle className="w-3.5 h-3.5" /> More Info Needed
+          </span>
+        );
+      case 'Under Review':
+      case 'Pending Review':
+        return (
+          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-amber-100 text-amber-800">
+            <Clock className="w-3.5 h-3.5" /> Pending Review
+          </span>
+        );
+      default:
+        return (
+          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-slate-100 text-slate-700">
+            <Clock className="w-3.5 h-3.5" /> Pending Assignment
+          </span>
+        );
+    }
+  };
+
+  const totalDocsCount = documents.length;
+  const pendingCount = documents.filter(
+    d => d.file_review_status === 'Pending Review' || d.file_review_status === 'Under Review' || !d.file_review_status
   ).length;
-  const completedCount = requests.filter(r => r.current_status === 'RESOLVED').length;
+  const correctionsCount = documents.filter(d => d.file_review_status === 'Correction Required').length;
 
   return (
-    <div className="space-y-6 pb-8">
+    <div className="space-y-6 pb-12 max-w-6xl mx-auto">
       {/* Header Banner */}
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center bg-white p-6 rounded-xl border border-slate-200 shadow-sm gap-4">
+      <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-slate-800">Welcome, {user?.name || user?.username || 'Citizen'}</h1>
-          <p className="text-xs text-slate-500 mt-1">
-            Track verification workflows, document readiness checklists, and volunteer support
+          <h1 className="text-2xl font-bold text-slate-900">
+            Welcome, {user?.name || user?.username || 'Citizen'}
+          </h1>
+          <p className="text-sm text-slate-500 mt-1">
+            Upload and track your documents for electoral roll revision.
           </p>
         </div>
-        <div className="flex flex-wrap gap-2">
-          <button
-            onClick={() => {
-              setReqFormErrors({});
-              setSelectedDocIds(documents.map(d => d.document_id));
-              setShowCreateReqModal(true);
-            }}
-            className="btn btn-primary btn-sm"
-          >
-            <PlusCircle className="w-4 h-4" /> New Verification Request
-          </button>
-          <button
-            onClick={() => {
-              setAssistFormErrors({});
-              setShowAssistanceModal(true);
-            }}
-            className="btn btn-outline btn-sm text-purple-700 border-purple-300 hover:bg-purple-50"
-          >
-            <HelpCircle className="w-4 h-4" /> Request Volunteer Help
-          </button>
-        </div>
+        <button
+          onClick={() => {
+            setUploadError('');
+            setSelectedFile(null);
+            setShowUploadModal(true);
+          }}
+          className="btn btn-primary bg-blue-600 hover:bg-blue-700 text-white font-semibold px-4 py-2.5 rounded-xl shadow-sm flex items-center gap-2 text-sm transition"
+        >
+          <Upload className="w-4 h-4" /> Upload Document
+        </button>
       </div>
 
-      {/* Success Banner if an action just occurred */}
-      {submitSuccess && (
-        <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 p-4 rounded-xl flex items-start justify-between">
-          <div className="flex items-start gap-3">
-            <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
-            <div>
-              <h2 className="text-sm font-bold text-emerald-900">{submitSuccess.title}</h2>
-              <p className="text-xs text-emerald-700 mt-0.5">{submitSuccess.message}</p>
-              {submitSuccess.requestId && (
-                <Link
-                  to={`/requests/${submitSuccess.requestId}`}
-                  className="text-xs font-bold text-emerald-800 underline mt-1.5 inline-block"
-                >
-                  View Request Details & Timeline →
-                </Link>
-              )}
-            </div>
+      {/* Upload Success Alert */}
+      {uploadSuccess && (
+        <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 px-4 py-3 rounded-xl flex items-center justify-between text-sm shadow-sm">
+          <div className="flex items-center gap-2 font-medium">
+            <CheckCircle2 className="w-5 h-5 text-emerald-600" />
+            <span>{uploadSuccess}</span>
           </div>
-          <button
-            onClick={() => setSubmitSuccess(null)}
-            className="text-emerald-500 hover:text-emerald-700 font-bold text-sm"
-          >
-            ✕
+          <button onClick={() => setUploadSuccess(null)} className="text-emerald-600 hover:text-emerald-800 font-bold">
+            <X className="w-4 h-4" />
           </button>
         </div>
       )}
 
-
-      {/* Action Required: Document Correction Alert */}
-      {uploadedDocs.some(d => d.file_review_status === 'Correction Required') && (
-        <div className="bg-rose-50 border border-rose-200 text-rose-900 p-4 rounded-xl flex items-center justify-between shadow-sm">
+      {/* Action Required: Correction Alert */}
+      {correctionsCount > 0 && (
+        <div className="bg-rose-50 border border-rose-200 text-rose-900 p-4 rounded-xl flex items-center justify-between text-sm shadow-sm">
           <div className="flex items-center gap-3">
             <AlertCircle className="w-5 h-5 text-rose-600 shrink-0" />
-            <div className="text-xs">
-              <span className="font-bold text-sm block">Action Required: Volunteer Feedback on Uploaded Document(s)</span>
-              One or more of your supporting documents need correction or a clearer image.
+            <div>
+              <span className="font-bold block">Correction Needed on Uploaded Document</span>
+              <span>A volunteer reviewer has requested a clearer or corrected copy. Please view the feedback below.</span>
             </div>
           </div>
-          <Link to="/documents" className="btn btn-sm bg-rose-600 hover:bg-rose-700 text-white border-none text-xs">
-            View Feedback & Resubmit →
-          </Link>
+          <button
+            onClick={() => {
+              const needsFix = documents.find(d => d.file_review_status === 'Correction Required');
+              if (needsFix) openDocumentModal(needsFix);
+            }}
+            className="btn btn-sm bg-rose-600 hover:bg-rose-700 text-white font-semibold px-3 py-1.5 rounded-lg text-xs"
+          >
+            Review Feedback
+          </button>
         </div>
       )}
 
-      {/* Analytics KPI Metrics */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-        <div className="card text-center p-3">
-          <span className="text-2xl font-black text-blue-600 block">{requests.length}</span>
-          <span className="text-[11px] text-slate-500 font-medium">Total Requests</span>
+      {/* 3 Simple Metric Cards */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex items-center gap-4">
+          <div className="w-12 h-12 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center font-bold">
+            <FileText className="w-6 h-6" />
+          </div>
+          <div>
+            <span className="text-2xl font-black text-slate-800">{totalDocsCount}</span>
+            <span className="text-xs text-slate-500 block font-medium">My Documents</span>
+          </div>
         </div>
-        <div className="card text-center p-3">
-          <span className="text-2xl font-black text-amber-600 block">{uploadedDocs.filter(d => d.file_review_status === 'Pending Review').length}</span>
-          <span className="text-[11px] text-slate-500 font-medium">Docs In Review</span>
+
+        <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex items-center gap-4">
+          <div className="w-12 h-12 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center font-bold">
+            <Clock className="w-6 h-6" />
+          </div>
+          <div>
+            <span className="text-2xl font-black text-amber-600">{pendingCount}</span>
+            <span className="text-xs text-slate-500 block font-medium">Pending Reviews</span>
+          </div>
         </div>
-        <div className="card text-center p-3">
-          <span className="text-2xl font-black text-rose-600 block">{uploadedDocs.filter(d => d.file_review_status === 'Correction Required').length}</span>
-          <span className="text-[11px] text-slate-500 font-medium">Corrections Needed</span>
-        </div>
-        <div className="card text-center p-3">
-          <span className="text-2xl font-black text-emerald-600 block">{uploadedDocs.filter(d => d.file_review_status === 'Reviewed – No Issues Found').length}</span>
-          <span className="text-[11px] text-slate-500 font-medium">Docs Reviewed</span>
-        </div>
-        <div className="card text-center p-3">
-          <span className="text-2xl font-black text-purple-600 block">{assistanceRequests.length}</span>
-          <span className="text-[11px] text-slate-500 font-medium">Volunteer Requests</span>
+
+        <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex items-center gap-4">
+          <div className="w-12 h-12 rounded-xl bg-rose-50 text-rose-600 flex items-center justify-center font-bold">
+            <AlertCircle className="w-6 h-6" />
+          </div>
+          <div>
+            <span className="text-2xl font-black text-rose-600">{correctionsCount}</span>
+            <span className="text-xs text-slate-500 block font-medium">Corrections Needed</span>
+          </div>
         </div>
       </div>
 
-      {/* Document Readiness Checklist Widget (Form 6 Integration) */}
-      {readiness && (
-        <div className="card shadow-sm border-slate-200">
-          <ReadinessBadge readiness={readiness} />
-        </div>
-      )}
-
-      {/* My Verification Requests Table */}
-      <div className="card shadow-sm border-slate-200">
-        <div className="card-header">
-          <h2 className="card-title text-base flex items-center gap-2">
-            <FileText className="w-5 h-5 text-blue-600" /> My Verification Requests
-          </h2>
-          <Link to="/documents" className="text-xs text-blue-600 font-semibold hover:underline">
-            Manage Documents ({documents.length}) →
-          </Link>
+      {/* My Documents Section */}
+      <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
+        <div className="p-5 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
+          <div>
+            <h2 className="font-bold text-slate-800 text-base flex items-center gap-2">
+              <FileCheck2 className="w-5 h-5 text-blue-600" /> My Uploaded Documents
+            </h2>
+            <p className="text-xs text-slate-500 mt-0.5">
+              Review volunteer feedback, download uploaded files, or resubmit updated versions.
+            </p>
+          </div>
+          <span className="text-xs font-semibold text-slate-500 bg-white px-2.5 py-1 rounded-full border border-slate-200">
+            {documents.length} Total
+          </span>
         </div>
 
-        <div className="table-container">
-          <table className="table">
+        <div className="overflow-x-auto">
+          <table className="w-full text-left border-collapse text-xs">
             <thead>
-              <tr>
-                <th>Request ID</th>
-                <th>Request Type</th>
-                <th>Submission Date</th>
-                <th>Current Status</th>
-                <th>Remarks</th>
-                <th>Actions</th>
+              <tr className="bg-slate-50 text-slate-600 uppercase text-[11px] font-bold border-b border-slate-200">
+                <th className="py-3.5 px-4">Document</th>
+                <th className="py-3.5 px-4">Uploaded On</th>
+                <th className="py-3.5 px-4">Status</th>
+                <th className="py-3.5 px-4">Assigned Volunteer</th>
+                <th className="py-3.5 px-4 text-right">Action</th>
               </tr>
             </thead>
-            <tbody>
+            <tbody className="divide-y divide-slate-100">
               {loading ? (
                 <tr>
-                  <td colSpan="6" className="text-center py-6 text-slate-400">
-                    <Loader2 className="w-4 h-4 animate-spin inline mr-2" /> Loading verification requests...
+                  <td colSpan="5" className="text-center py-8 text-slate-400">
+                    <Loader2 className="w-5 h-5 animate-spin inline mr-2 text-blue-600" /> Loading your documents...
                   </td>
                 </tr>
-              ) : requests.length === 0 ? (
+              ) : documents.length === 0 ? (
                 <tr>
-                  <td colSpan="6" className="text-center py-8 text-slate-400">
-                    No verification requests logged yet. Click "New Verification Request" above to begin.
+                  <td colSpan="5" className="text-center py-12 text-slate-400">
+                    <FileText className="w-10 h-10 text-slate-300 mx-auto mb-2" />
+                    <p className="font-semibold text-slate-700 text-sm">No documents uploaded yet.</p>
+                    <p className="text-xs text-slate-500 mt-1 mb-4">
+                      Upload proof of address, identity, or age to initiate verification.
+                    </p>
+                    <button
+                      onClick={() => setShowUploadModal(true)}
+                      className="btn btn-sm btn-primary bg-blue-600 text-white font-semibold px-4 py-2 rounded-lg"
+                    >
+                      <Upload className="w-3.5 h-3.5 mr-1" /> Upload Document
+                    </button>
                   </td>
                 </tr>
               ) : (
-                requests.map(req => (
-                  <tr key={req.request_id}>
-                    <td className="font-mono font-bold text-blue-700">VR100{req.request_id}</td>
-                    <td className="font-semibold text-slate-800">{req.request_type}</td>
-                    <td className="text-xs text-slate-500">{new Date(req.submission_date).toLocaleDateString()}</td>
-                    <td>
-                      <span className={`badge badge-${req.current_status.toLowerCase()}`}>
-                        {req.current_status}
-                      </span>
+                documents.map(doc => (
+                  <tr key={doc.document_id} className="hover:bg-slate-50/70 transition">
+                    <td className="py-3.5 px-4">
+                      <div className="font-semibold text-slate-800 text-sm">{doc.document_type}</div>
+                      <div className="flex items-center gap-2 mt-0.5">
+                        <span className="font-mono text-[10px] text-slate-400">DOC#{doc.document_id}</span>
+                        <span className="font-mono text-[10px] bg-slate-100 text-slate-600 px-1.5 py-0.2 rounded border">
+                          v{doc.current_version || 1}
+                        </span>
+                      </div>
                     </td>
-                    <td className="text-xs text-slate-600 max-w-xs truncate">{req.remarks || '—'}</td>
-                    <td>
-                      <Link to={`/requests/${req.request_id}`} className="btn btn-outline btn-sm text-xs">
-                        <Eye className="w-3.5 h-3.5" /> Details & Timeline
-                      </Link>
+                    <td className="py-3.5 px-4 text-slate-600">
+                      {doc.uploaded_at ? new Date(doc.uploaded_at).toLocaleDateString() : '—'}
                     </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      {/* My Documents & Volunteer Review Status (Task 2 & 3) */}
-      <div className="card shadow-sm border-slate-200">
-        <div className="card-header">
-          <h2 className="card-title text-base flex items-center gap-2">
-            <FileCheck className="w-5 h-5 text-indigo-600" /> My Documents & Volunteer Review Status
-          </h2>
-          <Link to="/documents" className="text-xs text-blue-600 font-semibold hover:underline">
-            Upload & Manage All Documents →
-          </Link>
-        </div>
-
-        <div className="table-container">
-          <table className="table">
-            <thead>
-              <tr>
-                <th>Document</th>
-                <th>Version</th>
-                <th>Review Status</th>
-                <th>Assigned Volunteer</th>
-                <th>Action</th>
-              </tr>
-            </thead>
-            <tbody>
-              {uploadedDocs.length === 0 ? (
-                <tr>
-                  <td colSpan="5" className="text-center py-6 text-slate-400 text-xs">
-                    No documents uploaded yet.{' '}
-                    <Link to="/documents" className="text-blue-600 underline font-semibold">
-                      Upload your first document
-                    </Link>{' '}
-                    to initiate volunteer verification.
-                  </td>
-                </tr>
-              ) : (
-                uploadedDocs.map(doc => (
-                  <tr key={doc.document_id}>
-                    <td>
-                      <div className="font-semibold text-slate-800 text-xs">{doc.document_type}</div>
-                      <span className="text-[10px] text-slate-400 font-mono">DOC#{doc.document_id}</span>
+                    <td className="py-3.5 px-4">
+                      {renderStatusBadge(doc.file_review_status)}
                     </td>
-                    <td>
-                      <span className="font-mono text-[11px] font-bold bg-slate-100 text-slate-700 px-1.5 py-0.5 rounded border">
-                        v{doc.current_version || 1}
-                      </span>
-                    </td>
-                    <td>
-                      <span className={`badge badge-sm ${
-                        doc.file_review_status === 'Reviewed – No Issues Found' ? 'badge-resolved' :
-                        doc.file_review_status === 'Correction Required' ? 'badge-rejected' :
-                        doc.file_review_status === 'Under Review' ? 'badge-under_review' : 'badge-submitted'
-                      }`}>
-                        {doc.file_review_status || 'Pending Assignment'}
-                      </span>
-                    </td>
-                    <td className="text-xs">
+                    <td className="py-3.5 px-4">
                       {doc.assigned_volunteer_name ? (
-                        <div className="flex items-center gap-1.5">
-                          <span className="font-semibold text-indigo-700">{doc.assigned_volunteer_name}</span>
-                          <span className="text-[10px] text-slate-400 font-mono">(VOL#{doc.assigned_volunteer_id})</span>
+                        <div>
+                          <span className="font-semibold text-indigo-700 block text-xs">{doc.assigned_volunteer_name}</span>
+                          <span className="text-[10px] text-slate-400 font-mono">VOL#{doc.assigned_volunteer_id}</span>
                         </div>
                       ) : (
-                        <span className="text-slate-400 italic text-[11px]">Not Assigned Yet</span>
+                        <span className="text-slate-400 italic text-xs">Pending Assignment</span>
                       )}
                     </td>
-                    <td>
-                      <Link
-                        to="/documents"
-                        state={{ highlightDocId: doc.document_id }}
-                        className="btn btn-outline btn-sm text-xs py-1 px-2.5"
+                    <td className="py-3.5 px-4 text-right whitespace-nowrap">
+                      <button
+                        onClick={() => openDocumentModal(doc)}
+                        className="btn btn-outline btn-sm text-xs py-1.5 px-3 text-blue-700 border-blue-200 hover:bg-blue-50 rounded-lg inline-flex items-center gap-1.5 font-semibold"
                       >
-                        <Eye className="w-3.5 h-3.5 mr-1" />
-                        {doc.feedback_message ? 'View Feedback' : 'View'}
-                      </Link>
+                        <Eye className="w-3.5 h-3.5" />
+                        {doc.file_review_status === 'Correction Required' ? 'View Feedback' : 'View'}
+                      </button>
                     </td>
                   </tr>
                 ))
@@ -429,135 +396,85 @@ export default function CitizenDashboard() {
         </div>
       </div>
 
-      {/* FORM 5 MODAL: Create Verification Request */}
-      {showCreateReqModal && (
+      {/* SIMPLE UPLOAD MODAL (Priority 4) */}
+      {showUploadModal && (
         <div className="modal-overlay">
-          <div className="modal-content">
-            <div className="flex justify-between items-center mb-4 pb-3 border-b border-slate-100">
+          <div className="modal-content max-w-md p-6 rounded-2xl bg-white shadow-2xl">
+            <div className="flex justify-between items-center pb-3 border-b border-slate-100 mb-4">
               <div>
-                <h3 className="text-base font-bold text-slate-800 flex items-center gap-2">
-                  <FileText className="w-4 h-4 text-blue-600" /> New Verification Request (Form 5)
+                <h3 className="font-bold text-slate-800 text-base flex items-center gap-2">
+                  <Upload className="w-5 h-5 text-blue-600" /> Upload Document
                 </h3>
-                <p className="text-[11px] text-slate-500">Initiate document verification and readiness analysis</p>
+                <p className="text-xs text-slate-500 mt-0.5">Submit supporting proof for regional volunteer review</p>
               </div>
               <button
-                type="button"
-                onClick={() => setShowCreateReqModal(false)}
-                className="text-slate-400 hover:text-slate-600 text-sm font-bold"
+                onClick={() => setShowUploadModal(false)}
+                className="text-slate-400 hover:text-slate-600 p-1 font-bold"
               >
-                ✕
+                <X className="w-5 h-5" />
               </button>
             </div>
 
-            {reqFormErrors.general && (
-              <div className="bg-red-50 text-red-700 text-xs p-3 rounded-lg mb-4 border border-red-200 flex items-center gap-2">
-                <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />
-                <span>{reqFormErrors.general}</span>
+            {uploadError && (
+              <div className="bg-rose-50 border border-rose-200 text-rose-700 text-xs p-3 rounded-lg mb-4 flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 shrink-0 text-rose-600" />
+                <span>{uploadError}</span>
               </div>
             )}
 
-            <form onSubmit={handleCreateRequest} noValidate className="space-y-4 text-xs">
-              <div className="form-group mb-0">
-                <label className="form-label">
-                  Request Type <span className="req">*</span>
+            <form onSubmit={handleUploadSubmit} className="space-y-4 text-xs">
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">
+                  Document Type <span className="text-rose-500">*</span>
                 </label>
                 <select
-                  value={reqType}
-                  onChange={e => setReqType(e.target.value)}
-                  className="form-select"
+                  value={docType}
+                  onChange={e => setDocType(e.target.value)}
+                  className="w-full border border-slate-300 rounded-lg p-2.5 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
                 >
-                  <option value="Record Verification">Record Verification (Confirm existing electoral record)</option>
-                  <option value="Correction Assistance">Correction Assistance (Correct name, age, or address)</option>
-                  <option value="Missing Record Assistance">Missing Record Assistance (Unlisted / shifted citizen)</option>
-                  <option value="Document Clarification">Document Clarification (Resolve identity query)</option>
-                  <option value="General Assistance">General Assistance (General verification inquiry)</option>
+                  <option value="Address Proof">Address Proof (Electricity Bill, Water Bill, Rent Deed)</option>
+                  <option value="Identity Proof">Identity Proof (Aadhaar Card, Passport, PAN Card)</option>
+                  <option value="Age Proof">Age Proof (Birth Certificate, School Leaving Certificate)</option>
+                  <option value="Income Certificate">Income Certificate</option>
+                  <option value="Caste Certificate">Caste Certificate</option>
                 </select>
-                <p className="form-hint">Determines checklist requirements pulled from the database.</p>
               </div>
 
-              <div className="form-group mb-0">
-                <label className="form-label">
-                  Voter EPIC Reference Number (Optional)
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">
+                  Choose File <span className="text-rose-500">*</span>
                 </label>
                 <input
-                  type="text"
-                  value={voterRef}
-                  onChange={e => setVoterRef(e.target.value)}
-                  placeholder="e.g. KA/01/168/XXXX01 (Fictional / Masked)"
-                  className="form-input font-mono text-xs"
+                  type="file"
+                  accept=".pdf,image/jpeg,image/jpg,image/png"
+                  onChange={handleFileChange}
+                  className="w-full border border-slate-300 rounded-lg p-2 text-xs bg-slate-50 file:mr-3 file:py-1.5 file:px-3 file:rounded-md file:border-0 file:text-xs file:font-semibold file:bg-blue-600 file:text-white hover:file:bg-blue-700 cursor-pointer"
+                  required
                 />
-                <p className="form-hint">Reference only. Used for cross-referencing mock constituency records.</p>
+                <span className="text-[10px] text-slate-400 mt-1 block">
+                  Accepted formats: PDF, JPG, PNG (Max size: 5 MB)
+                </span>
               </div>
 
-              {/* Associated Documents Selection */}
-              <div className="form-group mb-0">
-                <label className="form-label">
-                  Attach Supporting Documents from Your Repository
-                </label>
-                {documents.length === 0 ? (
-                  <div className="p-3 bg-amber-50 rounded border border-amber-200 text-amber-800 text-[11px]">
-                    No documents recorded yet. You can still submit the request; the system will mark required documents as <strong>Missing</strong> in your readiness checklist.
-                  </div>
-                ) : (
-                  <div className="space-y-1.5 max-h-36 overflow-y-auto p-2 bg-slate-50 rounded border border-slate-200">
-                    {documents.map(doc => (
-                      <label key={doc.document_id} className="flex items-center gap-2 cursor-pointer p-1.5 hover:bg-white rounded transition">
-                        <input
-                          type="checkbox"
-                          checked={selectedDocIds.includes(doc.document_id)}
-                          onChange={() => toggleDocSelection(doc.document_id)}
-                          className="rounded text-blue-600"
-                        />
-                        <span className="font-semibold text-slate-800">{doc.document_type}</span>
-                        <span className="text-[10px] text-slate-400 font-mono">({doc.document_reference_masked})</span>
-                      </label>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              {/* Remarks / Description */}
-              <div className="form-group mb-0">
-                <div className="flex justify-between items-center mb-1">
-                  <label className="form-label mb-0">Remarks / Description</label>
-                  <span className="text-[10px] text-slate-400">{reqRemarks.length} / 500 chars</span>
-                </div>
-                <textarea
-                  rows="3"
-                  maxLength="500"
-                  value={reqRemarks}
-                  onChange={e => setReqRemarks(e.target.value)}
-                  placeholder="Describe your verification requirement or specify correction details..."
-                  className={`form-textarea text-xs ${reqFormErrors.reqRemarks ? 'is-invalid' : ''}`}
-                />
-                {reqFormErrors.reqRemarks && (
-                  <span className="form-feedback-error"><XCircle className="w-3.5 h-3.5" />{reqFormErrors.reqRemarks}</span>
-                )}
-              </div>
-
-              <div className="bg-slate-50 p-2.5 rounded border border-slate-200 text-[10px] text-slate-500">
-                * Note: Submitting initiates a database transaction that generates an immutable Request ID and evaluates readiness against official guidelines.
-              </div>
-
-              <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
+              <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
                 <button
                   type="button"
-                  onClick={() => setShowCreateReqModal(false)}
-                  className="btn btn-outline btn-sm"
+                  onClick={() => setShowUploadModal(false)}
+                  className="btn btn-outline btn-sm text-xs px-4 py-2 border-slate-300 rounded-lg"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  disabled={submittingReq}
-                  className="btn btn-primary btn-sm px-4"
+                  disabled={uploading}
+                  className="btn btn-primary btn-sm bg-blue-600 hover:bg-blue-700 text-white font-semibold px-4 py-2 rounded-lg flex items-center gap-1.5"
                 >
-                  {submittingReq ? (
+                  {uploading ? (
                     <>
-                      <Loader2 className="w-3.5 h-3.5 animate-spin" /> Submitting Request...
+                      <Loader2 className="w-4 h-4 animate-spin" /> Uploading...
                     </>
                   ) : (
-                    'Submit Verification Request'
+                    'Upload Document'
                   )}
                 </button>
               </div>
@@ -566,124 +483,223 @@ export default function CitizenDashboard() {
         </div>
       )}
 
-      {/* FORM 7 MODAL: Request Volunteer Assistance */}
-      {showAssistanceModal && (
+      {/* DOCUMENT PREVIEW & DETAILS MODAL */}
+      {selectedDoc && (
         <div className="modal-overlay">
-          <div className="modal-content">
-            <div className="flex justify-between items-center mb-4 pb-3 border-b border-slate-100">
+          <div className="modal-content max-w-4xl max-h-[92vh] flex flex-col p-0 overflow-hidden bg-white rounded-2xl shadow-2xl">
+            {/* Modal Header */}
+            <div className="p-4 border-b border-slate-200 flex justify-between items-center bg-slate-50">
               <div>
-                <h3 className="text-base font-bold text-slate-800 flex items-center gap-2">
-                  <HelpCircle className="w-4 h-4 text-purple-600" /> Request Community Volunteer Help (Form 7)
+                <h3 className="font-bold text-slate-900 text-base flex items-center gap-2">
+                  <FileText className="w-5 h-5 text-blue-600" /> {selectedDoc.document_type}
                 </h3>
-                <p className="text-[11px] text-slate-500">Connect with nearby verified volunteers for digital or physical guidance</p>
+                <div className="flex items-center gap-3 text-xs text-slate-500 mt-0.5">
+                  <span>Version: <strong>v{selectedDoc.current_version || 1}</strong></span>
+                  <span>•</span>
+                  <span>Status: {renderStatusBadge(selectedDoc.file_review_status)}</span>
+                </div>
               </div>
               <button
-                type="button"
-                onClick={() => setShowAssistanceModal(false)}
-                className="text-slate-400 hover:text-slate-600 text-sm font-bold"
+                onClick={() => { setSelectedDoc(null); setDocDetail(null); setPreviewVersion(null); }}
+                className="text-slate-400 hover:text-slate-600 p-1 font-bold"
               >
-                ✕
+                <X className="w-5 h-5" />
               </button>
             </div>
 
-            {assistFormErrors.general && (
-              <div className="bg-red-50 text-red-700 text-xs p-3 rounded-lg mb-4 border border-red-200 flex items-center gap-2">
-                <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />
-                <span>{assistFormErrors.general}</span>
-              </div>
-            )}
-
-            <form onSubmit={handleCreateAssistance} noValidate className="space-y-4 text-xs">
-              <div className="form-group mb-0">
-                <label className="form-label">
-                  Assistance Type <span className="req">*</span>
-                </label>
-                <select
-                  value={assistType}
-                  onChange={e => setAssistType(e.target.value)}
-                  className="form-select"
-                >
-                  <option value="Digital Assistance">Digital Assistance (Portal & Form Guidance)</option>
-                  <option value="Form Filling">Form Filling (Assistance entering details)</option>
-                  <option value="Doorstep Visit">Doorstep Visit (Senior Citizen / Mobility Impaired)</option>
-                  <option value="Document Scan">Document Scan (Document check & formatting)</option>
-                  <option value="Language Help">Language Help (Kannada / Regional Translation)</option>
-                </select>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div className="form-group mb-0">
-                  <label className="form-label">Urgency Priority</label>
-                  <select
-                    value={assistPriority}
-                    onChange={e => setAssistPriority(e.target.value)}
-                    className="form-select"
-                  >
-                    <option value="Low">Low (General guidance)</option>
-                    <option value="Medium">Medium (Standard)</option>
-                    <option value="High">High (Senior Citizen / Critical Deadlines)</option>
-                  </select>
+            {/* Modal Body */}
+            <div className="flex-1 overflow-y-auto grid grid-cols-1 md:grid-cols-12 gap-0">
+              {/* Left Column: File Preview */}
+              <div className="md:col-span-7 p-4 bg-slate-100 flex flex-col border-r border-slate-200">
+                <div className="flex justify-between items-center mb-2">
+                  <span className="text-xs font-semibold text-slate-700">
+                    Document Preview: Version {previewVersion?.version_number || 1}
+                  </span>
+                  <div className="flex items-center gap-1 bg-white px-2 py-0.5 rounded-lg border border-slate-200 text-xs">
+                    <button
+                      type="button"
+                      onClick={() => setZoomLevel(prev => Math.max(0.5, prev - 0.2))}
+                      className="p-1 hover:text-blue-600"
+                      title="Zoom Out"
+                    >
+                      <ZoomOut className="w-3.5 h-3.5" />
+                    </button>
+                    <span className="text-[11px] font-mono px-1">{Math.round(zoomLevel * 100)}%</span>
+                    <button
+                      type="button"
+                      onClick={() => setZoomLevel(prev => Math.min(2.5, prev + 0.2))}
+                      className="p-1 hover:text-blue-600"
+                      title="Zoom In"
+                    >
+                      <ZoomIn className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setZoomLevel(1)}
+                      className="p-1 hover:text-blue-600 ml-1"
+                      title="Reset Zoom"
+                    >
+                      <Maximize2 className="w-3 h-3" />
+                    </button>
+                  </div>
                 </div>
 
-                <div className="form-group mb-0">
-                  <label className="form-label">Area / Zone</label>
-                  <input
-                    type="text"
-                    value={assistArea}
-                    onChange={e => setAssistArea(e.target.value)}
-                    placeholder="e.g. Bengaluru South Zone"
-                    className="form-input"
-                  />
-                </div>
-              </div>
-
-              <div className="form-group mb-0">
-                <div className="flex justify-between items-center mb-1">
-                  <label className="form-label mb-0">
-                    Notes & Special Needs <span className="req">*</span>
-                  </label>
-                  <span className="text-[10px] text-slate-400">{assistNotes.length} / 500 chars</span>
-                </div>
-                <textarea
-                  rows="3"
-                  maxLength="500"
-                  value={assistNotes}
-                  onChange={e => {
-                    setAssistNotes(e.target.value);
-                    if (assistFormErrors.assistNotes) setAssistFormErrors({ ...assistFormErrors, assistNotes: '' });
-                  }}
-                  placeholder="State your exact assistance requirement (e.g. elderly citizen needing doorstep help with Kannada language)..."
-                  className={`form-textarea text-xs ${assistFormErrors.assistNotes ? 'is-invalid' : ''}`}
-                  required
-                />
-                {assistFormErrors.assistNotes && (
-                  <span className="form-feedback-error"><XCircle className="w-3.5 h-3.5" />{assistFormErrors.assistNotes}</span>
+                {loadingDetail ? (
+                  <div className="flex-1 flex items-center justify-center bg-white rounded-xl border border-slate-200 min-h-[350px]">
+                    <Loader2 className="w-6 h-6 animate-spin text-blue-600" />
+                  </div>
+                ) : previewVersion ? (
+                  <div className="flex-1 bg-white rounded-xl border border-slate-300 overflow-auto min-h-[350px] max-h-[500px] flex items-center justify-center p-2 relative">
+                    {previewVersion.mime_type === 'application/pdf' ? (
+                      <iframe
+                        src={`/api/documents/${selectedDoc.document_id}/versions/${previewVersion.version_id}/file`}
+                        title="PDF Preview"
+                        className="w-full h-full min-h-[460px] border-0 rounded"
+                        style={{ transform: `scale(${zoomLevel})`, transformOrigin: 'top center' }}
+                      />
+                    ) : (
+                      <img
+                        src={`/api/documents/${selectedDoc.document_id}/versions/${previewVersion.version_id}/file`}
+                        alt="Document Preview"
+                        className="max-w-full max-h-full object-contain transition-transform"
+                        style={{ transform: `scale(${zoomLevel})` }}
+                      />
+                    )}
+                  </div>
+                ) : (
+                  <div className="flex-1 flex items-center justify-center bg-white rounded-xl border text-xs text-slate-400 p-8">
+                    Preview unavailable.
+                  </div>
                 )}
               </div>
 
-              <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
-                <button
-                  type="button"
-                  onClick={() => setShowAssistanceModal(false)}
-                  className="btn btn-outline btn-sm"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={submittingAssist}
-                  className="btn btn-primary btn-sm px-4 bg-purple-600 hover:bg-purple-700 border-none"
-                >
-                  {submittingAssist ? (
-                    <>
-                      <Loader2 className="w-3.5 h-3.5 animate-spin" /> Logging Request...
-                    </>
-                  ) : (
-                    'Submit Assistance Request'
-                  )}
-                </button>
+              {/* Right Column: Review Details & Resubmission */}
+              <div className="md:col-span-5 p-4 space-y-4 bg-white overflow-y-auto max-h-[560px] text-xs">
+                {/* Assigned Volunteer Card */}
+                {docDetail?.document?.assigned_volunteer_name || selectedDoc.assigned_volunteer_name ? (
+                  <div className="bg-indigo-50 border border-indigo-200 rounded-xl p-3.5 text-xs">
+                    <span className="text-[10px] uppercase font-bold text-slate-500 tracking-wider block">
+                      Assigned Volunteer Reviewer
+                    </span>
+                    <span className="font-bold text-indigo-950 text-sm block mt-0.5">
+                      {docDetail?.document?.assigned_volunteer_name || selectedDoc.assigned_volunteer_name}
+                    </span>
+                    <span className="text-[11px] text-slate-500 font-mono">
+                      Reference: VOL#{docDetail?.document?.assigned_volunteer_id || selectedDoc.assigned_volunteer_id}
+                    </span>
+                  </div>
+                ) : (
+                  <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-xs text-amber-800">
+                    <span className="font-semibold block">Waiting for volunteer assignment</span>
+                    <span className="text-[11px] text-amber-700">An approved volunteer from your region will be assigned shortly.</span>
+                  </div>
+                )}
+
+                {/* Latest Review Feedback */}
+                {selectedDoc.file_review_status === 'Correction Required' && (
+                  <div className="bg-rose-50 border border-rose-200 rounded-xl p-3.5 space-y-2">
+                    <span className="font-bold text-rose-900 block text-xs flex items-center gap-1.5">
+                      <AlertCircle className="w-4 h-4 text-rose-600" /> Correction Feedback from Volunteer
+                    </span>
+                    {selectedDoc.issue_category && (
+                      <span className="text-[11px] font-semibold text-rose-800 block">
+                        Issue: {selectedDoc.issue_category}
+                      </span>
+                    )}
+                    <p className="text-slate-700 italic bg-white p-2 rounded-lg border border-rose-100 text-[11px]">
+                      "{selectedDoc.feedback_message || 'Please upload a clearer copy of this document.'}"
+                    </p>
+
+                    {/* Resubmission Form */}
+                    <div className="pt-2 border-t border-rose-200/60 mt-3">
+                      <span className="font-bold text-slate-800 block mb-1.5">Upload Corrected Document</span>
+                      {resubmitError && (
+                        <div className="text-rose-700 text-[11px] mb-2">{resubmitError}</div>
+                      )}
+                      <form onSubmit={handleResubmit} className="space-y-2">
+                        <input
+                          type="file"
+                          accept=".pdf,image/jpeg,image/jpg,image/png"
+                          onChange={e => {
+                            setResubmitError('');
+                            setResubmitFile(e.target.files?.[0] || null);
+                          }}
+                          className="w-full text-[11px] border rounded-lg p-1.5 bg-white"
+                          required
+                        />
+                        <button
+                          type="submit"
+                          disabled={resubmitting}
+                          className="w-full btn btn-primary btn-sm bg-rose-600 hover:bg-rose-700 text-white font-semibold py-1.5 rounded-lg text-xs flex items-center justify-center gap-1"
+                        >
+                          {resubmitting ? (
+                            <>
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" /> Uploading Corrected Copy...
+                            </>
+                          ) : (
+                            <>
+                              <RefreshCw className="w-3.5 h-3.5" /> Submit Corrected Version (v{(selectedDoc.current_version || 1) + 1})
+                            </>
+                          )}
+                        </button>
+                      </form>
+                    </div>
+                  </div>
+                )}
+
+                {/* Version History List */}
+                <div>
+                  <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-2">
+                    Versions History ({docDetail?.versions?.length || 1})
+                  </h4>
+                  <div className="space-y-2">
+                    {docDetail?.versions?.map((v) => {
+                      const isActive = previewVersion?.version_id === v.version_id;
+                      return (
+                        <div
+                          key={v.version_id}
+                          onClick={() => setPreviewVersion(v)}
+                          className={`p-2.5 rounded-xl border text-xs cursor-pointer transition ${
+                            isActive
+                              ? 'border-blue-500 bg-blue-50/50 shadow-sm'
+                              : 'border-slate-200 hover:border-slate-300 bg-white'
+                          }`}
+                        >
+                          <div className="flex justify-between items-center">
+                            <span className="font-bold text-slate-800">
+                              Version {v.version_number}
+                              {v.version_number === selectedDoc.current_version && (
+                                <span className="ml-2 text-[10px] bg-blue-100 text-blue-700 px-1.5 py-0.2 rounded font-semibold">
+                                  Current
+                                </span>
+                              )}
+                            </span>
+                            <span className="text-[10px] text-slate-400">
+                              {new Date(v.uploaded_at).toLocaleDateString()}
+                            </span>
+                          </div>
+                          <span className="text-[11px] text-slate-500 font-mono block mt-0.5 truncate">
+                            {v.original_filename}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
               </div>
-            </form>
+            </div>
+
+            {/* Modal Footer */}
+            <div className="p-3 border-t border-slate-200 bg-slate-50 flex justify-between items-center text-xs">
+              <span className="text-slate-500">SIRAssist • Secure Document Verification</span>
+              <button
+                type="button"
+                onClick={() => { setSelectedDoc(null); setDocDetail(null); }}
+                className="btn btn-outline btn-sm text-xs px-3 py-1 rounded-lg"
+              >
+                Close
+              </button>
+            </div>
           </div>
         </div>
       )}

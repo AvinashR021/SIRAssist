@@ -8,6 +8,7 @@ const path = require('path');
 const fs   = require('fs');
 const db   = require('../db/connection');
 const { UPLOAD_DIR } = require('../middleware/uploadMiddleware');
+const { autoAssignDocument } = require('../services/regionAssignmentService');
 
 // ─── CITIZEN: Upload a new document file ────────────────────────────────────
 async function uploadDocument(req, res, next) {
@@ -64,14 +65,24 @@ async function uploadDocument(req, res, next) {
         [documentId, req.file.filename, req.file.originalname, req.file.mimetype, req.file.size, userId]
       );
 
-      return { documentId };
+      // Automated Region-Based Volunteer Assignment (Priority 2)
+      const assignment = await autoAssignDocument(documentId, citizenId, conn);
+
+      return { documentId, assignment };
     });
 
     res.status(201).json({
-      message: 'Document uploaded successfully. It is now queued for volunteer manual review.',
+      message: result.assignment
+        ? `Document uploaded successfully and assigned to ${result.assignment.volunteer_name}.`
+        : 'Document uploaded successfully. It is queued for volunteer review.',
       document_id: result.documentId,
       version_number: 1,
-      status: 'Pending Review'
+      status: 'Pending Review',
+      assigned_volunteer: result.assignment ? {
+        volunteer_id: result.assignment.volunteer_id,
+        volunteer_name: result.assignment.volunteer_name,
+        match_level: result.assignment.match_level
+      } : null
     });
   } catch (err) {
     if (req.file) {

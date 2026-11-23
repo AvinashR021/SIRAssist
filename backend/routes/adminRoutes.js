@@ -16,6 +16,7 @@ router.post('/assign-volunteer', adminController.assignVolunteer);
 // Document review & volunteer assignments
 router.get('/document-reviews', assignmentController.listAllDocuments);
 router.get('/documents', assignmentController.listAllDocuments);
+router.get('/documents/:id/eligible-volunteers', assignmentController.getEligibleVolunteersForDoc);
 router.get('/volunteer-assignments', assignmentController.listAssignments);
 router.post('/volunteer-assignments', assignmentController.createAssignment);
 

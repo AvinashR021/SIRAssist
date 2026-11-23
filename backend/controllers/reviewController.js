@@ -176,6 +176,8 @@ async function getAssignedDocumentDetail(req, res, next) {
 
     res.json({
       document: doc,
+      citizen_name: doc.citizen_name,
+      citizen_email: doc.citizen_email,
       versions,
       is_read_only: isReadOnly,
       assignment_status: assignment?.status || 'Completed',
@@ -194,12 +196,44 @@ async function submitReview(req, res, next) {
     if (!volunteerId) return res.status(403).json({ error: 'Volunteer session required.' });
     if (isNaN(documentId)) return res.status(400).json({ error: 'Invalid document ID.' });
 
-    const {
+    let {
       review_decision,
       issue_category,
+      reason,
       feedback_message,
       additional_document_request
     } = req.body;
+
+    const DECISION_MAP = {
+      'No Issues Found': 'Reviewed – No Issues Found',
+      'Correction Needed': 'Correction Required',
+      'More Information Needed': 'Additional Document Requested',
+      'Unable to Review': 'Unable to Review',
+      'Reviewed – No Issues Found': 'Reviewed – No Issues Found',
+      'Correction Required': 'Correction Required',
+      'Additional Document Requested': 'Additional Document Requested'
+    };
+
+    const finalDecision = DECISION_MAP[review_decision] || review_decision;
+
+    const CATEGORY_MAP = {
+      'Blurry document': 'Blurry or unreadable document',
+      'Incomplete document': 'Incomplete document',
+      'Wrong document': 'Incorrect document type',
+      'Missing page': 'Missing page',
+      'Other': 'Other issue',
+      'Blurry or unreadable document': 'Blurry or unreadable document',
+      'Incorrect document type': 'Incorrect document type',
+      'File cannot be opened': 'File cannot be opened',
+      'Other issue': 'Other issue',
+      'N/A': 'N/A'
+    };
+
+    let finalCategory = 'N/A';
+    if (finalDecision !== 'Reviewed – No Issues Found') {
+      const inputCat = issue_category || reason || 'Other issue';
+      finalCategory = CATEGORY_MAP[inputCat] || 'Other issue';
+    }
 
     const VALID_DECISIONS = [
       'Reviewed – No Issues Found',
@@ -207,12 +241,12 @@ async function submitReview(req, res, next) {
       'Additional Document Requested',
       'Unable to Review'
     ];
-    if (!review_decision || !VALID_DECISIONS.includes(review_decision)) {
+    if (!finalDecision || !VALID_DECISIONS.includes(finalDecision)) {
       return res.status(400).json({ error: 'Review decision is required and must be a valid option.' });
     }
 
-    if (['Correction Required', 'Unable to Review'].includes(review_decision)) {
-      if (!issue_category || issue_category === 'N/A') {
+    if (['Correction Required', 'Unable to Review'].includes(finalDecision)) {
+      if (!finalCategory || finalCategory === 'N/A') {
         return res.status(400).json({ error: 'Issue category is mandatory when correction or inability to review is selected.' });
       }
       if (!feedback_message || feedback_message.trim().length < 5) {
@@ -220,8 +254,9 @@ async function submitReview(req, res, next) {
       }
     }
 
-    if (review_decision === 'Additional Document Requested') {
-      if (!additional_document_request || additional_document_request.trim().length < 5) {
+    if (finalDecision === 'Additional Document Requested') {
+      const moreInfoReq = additional_document_request || feedback_message;
+      if (!moreInfoReq || moreInfoReq.trim().length < 5) {
         return res.status(400).json({ error: 'Please describe the additional document or information requested.' });
       }
     }
@@ -278,10 +313,10 @@ async function submitReview(req, res, next) {
         [
           doc.version_id,
           volunteerId,
-          review_decision,
-          issue_category || 'N/A',
+          finalDecision,
+          finalCategory,
           feedback_message?.trim() || null,
-          additional_document_request?.trim() || null
+          additional_document_request?.trim() || feedback_message?.trim() || null
         ]
       );
       const reviewId = revRes.insertId;
@@ -289,11 +324,11 @@ async function submitReview(req, res, next) {
       // 4. Update Document status
       await conn.query(
         'UPDATE Document SET file_review_status = ?, updated_at = NOW() WHERE document_id = ?',
-        [review_decision, documentId]
+        [finalDecision, documentId]
       );
 
       // 5. Mark assignment completed if no issues found
-      if (review_decision === 'Reviewed – No Issues Found') {
+      if (finalDecision === 'Reviewed – No Issues Found') {
         await conn.query(
           `UPDATE Volunteer_Assignment SET status = 'Completed' WHERE document_id = ? AND volunteer_id = ? AND status = 'Active'`,
           [documentId, volunteerId]
@@ -301,20 +336,20 @@ async function submitReview(req, res, next) {
       }
 
       // 6. Create Notification for citizen
-      const { title, message } = getNotificationContent(review_decision, feedback_message?.trim(), doc.document_type);
+      const { title, message } = getNotificationContent(finalDecision, feedback_message?.trim(), doc.document_type);
       await conn.query(
         `INSERT INTO Notification (citizen_id, request_id, document_id, review_id, title, message)
          VALUES (?, ?, ?, ?, ?, ?)`,
         [doc.citizen_id, null, documentId, reviewId, title, message]
       );
 
-      return { reviewId };
+      return { reviewId, newStatus: finalDecision };
     });
 
     res.json({
       message: 'Document review submitted successfully.',
       review_id: result.reviewId,
-      new_status: review_decision
+      new_status: result.newStatus
     });
   } catch (err) {
     if (err.status) {
